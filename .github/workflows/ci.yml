@@ -6,10 +6,10 @@ on:
     inputs:
       bbox:
         description: >
-          Bounding box "west,south,east,north" (leave empty for global).
-          Examples: "-80.5,20.9,-72.7,27.3" (Bahamas), "-82,24,-65,45" (US East Coast)
+          Bounding box "west,south,east,north".
+          Examples: "-85,20,-70,35" (Bahamas), "-82,24,-65,45" (US East Coast)
         required: false
-        default: ""
+        default: "-85,20,-70,35"
       max_zoom:
         description: "Maximum tile zoom level"
         required: false
@@ -28,7 +28,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  BBOX: ${{ github.event.inputs.bbox || '-80.5,20.9,-72.7,27.3' }}
+  BBOX: ${{ github.event.inputs.bbox || '-85,20,-70,35' }}
   MAX_ZOOM: ${{ github.event.inputs.max_zoom || '14' }}
 
 jobs:
@@ -40,7 +40,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Build Docker image
-        run: docker build -t gebco-pipeline .
+        run: docker build -t gebco-tiles .
 
       - name: Run pipeline
         run: |
@@ -48,7 +48,7 @@ jobs:
             -e BBOX="${BBOX}" \
             -e MAX_ZOOM="${MAX_ZOOM}" \
             -v "${{ github.workspace }}/output:/app/output" \
-            gebco-pipeline
+            gebco-tiles
 
       - name: Setup Node.js
         uses: actions/setup-node@v4

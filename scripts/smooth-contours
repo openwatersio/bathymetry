@@ -9,7 +9,7 @@ spline interpolation does — important for contour lines that must not cross.
 Uses osgeo/ogr + numpy — no shapely, scipy, or fiona needed.
 
 Usage:
-    python3 scripts/smooth-contours.py input.fgb output.fgb [iterations]
+    python3 scripts/smooth-contours input.fgb output.fgb [iterations]
 
     iterations: Number of Chaikin smoothing passes. Default 5.
 """

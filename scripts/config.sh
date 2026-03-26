@@ -24,7 +24,7 @@ GEBCO_TIF="${DATA_DIR}/gebco_2025.tif"
 # Format: "west,south,east,north"
 # Leave empty for full global processing.
 # Examples:
-#   Bahamas:        BBOX="-80.5,20.9,-72.7,27.3"
+#   Bahamas:        BBOX="-85,20,-70,35"
 #   US East Coast:  BBOX="-82,24,-65,45"
 #   Mediterranean:  BBOX="-6,30,36,46"
 BBOX="${BBOX:-}"
@@ -33,12 +33,6 @@ BBOX="${BBOX:-}"
 # Non-uniform: fine intervals for shallow water, coarse for deep.
 # Must be in increasing order (most negative first) for gdal_contour -fl.
 CONTOUR_LEVELS="-10000 -8000 -6000 -5000 -4000 -3000 -2000 -1500 -1000 -500 -200 -150 -100 -75 -50 -45 -40 -35 -30 -25 -20 -15 -14 -13 -12 -11 -10 -9 -8 -7 -6 -5 -4 -3 -2 -1"
-
-# ─── Output ──────────────────────────────────────────────────────────────────
-CONTOUR_MBTILES="${OUTPUT_DIR}/gebco-contours${BBOX:+_${BBOX}}.mbtiles"
-CONTOUR_PMTILES="${OUTPUT_DIR}/gebco-contours${BBOX:+_${BBOX}}.pmtiles"
-BANDS_MBTILES="${OUTPUT_DIR}/gebco-depth-bands${BBOX:+_${BBOX}}.mbtiles"
-BANDS_PMTILES="${OUTPUT_DIR}/gebco-depth-bands${BBOX:+_${BBOX}}.pmtiles"
 
 # ─── Terrain RGB ──────────────────────────────────────────────────────────────
 # GEBCO is 15 arc-second (~450m at equator). Zoom 9 ≈ 305m/pixel — a good
@@ -85,7 +79,7 @@ resolve_input_dem() {
     if [[ -f "${clipped}" ]]; then
       INPUT_TIF="${clipped}"
     else
-      log "ERROR: No input DEM found. Run ./scripts/download.sh first."
+      log "ERROR: No input DEM found. Run ./scripts/download first."
       exit 1
     fi
   fi
@@ -106,12 +100,7 @@ upsample_dem() {
   rm -f "${output}"
   log "Upsampling DEM 2x with cubicspline..."
   local res
-  res=$(gdalinfo -json "${input}" | python3 -c "
-import sys, json
-info = json.load(sys.stdin)
-gt = info['geoTransform']
-print(f'{abs(gt[1])/2} {abs(gt[5])/2}')
-")
+  res=$(gdalinfo -json "${input}" | jq -r '(.geoTransform[1,5] | fabs / 2) | tostring' | tr '\n' ' ')
   gdalwarp \
     -tr ${res} \
     -r cubicspline \

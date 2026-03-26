@@ -2,14 +2,14 @@
 # Download GEBCO gridded bathymetry data.
 #
 # Usage:
-#   ./scripts/download.sh                    # download full global grid
-#   BBOX="-80.5,20.9,-72.7,27.3" ./scripts/download.sh  # clip to Bahamas
+#   ./scripts/download                    # download full global grid
+#   BBOX="-85,20,-70,35" ./scripts/download  # clip to Bahamas
 #
 # The GEBCO grid is ~7.5 GB. If BBOX is set, the script downloads the full
 # grid and clips to the bounding box, producing a smaller working file.
 
 source "$(dirname "$0")/config.sh"
-check_deps curl gdal_translate gdalbuildvrt
+check_deps curl gdal_translate gdalbuildvrt jq
 
 # ─── Resolve GEBCO source ─────────────────────────────────────────────────────
 # The archive may contain a single global TIF or multiple sub-grid tiles.
@@ -83,4 +83,5 @@ else
     "${GEBCO_SRC}" "${CLIPPED}" >&2
   log "Clipped output: ${CLIPPED}"
 fi
+
 echo "${CLIPPED}"

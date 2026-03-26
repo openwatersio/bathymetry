@@ -2,7 +2,7 @@
 # Build Terrain-RGB tiles from a GEBCO GeoTIFF.
 #
 # Usage:
-#   ./scripts/build-terrain-rgb.sh [input.tif]
+#   ./scripts/terrain [input.tif]
 #
 # Outputs Terrain-RGB tiles as MBTiles, then extracts to a tile directory
 # for local development.
@@ -81,6 +81,5 @@ fi
 log ""
 log "Terrain-RGB build complete."
 log "  PMTiles: ${TERRAIN_PMTILES}"
-log "  Tiles:   ${TERRAIN_TILES}/{z}/{x}/{y}.png"
 log "  Encoding: mapbox (height = -10000 + (R*65536 + G*256 + B) * 0.1)"
 log "  Max zoom: ${TERRAIN_MAX_ZOOM}"

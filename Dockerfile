@@ -21,6 +21,7 @@ RUN apt-get update && apt-get install -y \
     libsqlite3-dev \
     zlib1g-dev \
     git \
+    imagemagick \
   && rm -rf /var/lib/apt/lists/*
 
 # Install rio-rgbify for Terrain-RGB encoding.
@@ -37,14 +38,16 @@ RUN git clone --depth 1 https://github.com/felt/tippecanoe.git /tmp/tippecanoe \
 
 # Install pmtiles CLI.
 RUN ARCH=$(dpkg --print-architecture) \
+  && case "${ARCH}" in amd64) ARCH=x86_64;; arm64) ;; *) echo "Unsupported arch: ${ARCH}" && exit 1;; esac \
+  && VERSION=$(curl -sL -o /dev/null -w '%{url_effective}' https://github.com/protomaps/go-pmtiles/releases/latest | grep -oE '[^/]+$') \
   && curl -L -o /tmp/go-pmtiles.tar.gz \
-    "https://github.com/protomaps/go-pmtiles/releases/latest/download/go-pmtiles_${ARCH}_linux.tar.gz" \
+    "https://github.com/protomaps/go-pmtiles/releases/download/${VERSION}/go-pmtiles_${VERSION#v}_Linux_${ARCH}.tar.gz" \
   && tar -xzf /tmp/go-pmtiles.tar.gz -C /usr/local/bin pmtiles \
   && chmod +x /usr/local/bin/pmtiles \
   && rm /tmp/go-pmtiles.tar.gz
 
 WORKDIR /app
 COPY scripts/ /app/scripts/
-RUN chmod +x /app/scripts/*.sh
+RUN chmod +x /app/scripts/*
 
-ENTRYPOINT ["/app/scripts/pipeline.sh"]
+ENTRYPOINT ["/app/scripts/build"]

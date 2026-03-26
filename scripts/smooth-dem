@@ -1,0 +1,117 @@
+#!/usr/bin/env bash
+# Slope-selective DEM smoothing using ImageMagick + GDAL.
+#
+# Blurs the DEM in flat areas (abyssal plains, shelves) to reduce noise-driven
+# contour stairstepping, while preserving detail in steep terrain (canyon walls,
+# seamount flanks). Both the DEM and the transition masks are blurred to avoid
+# hard edges at the steep/flat boundary.
+#
+# Based on: https://hkartor.se/anteckningar/contour_lines_script.html
+#
+# Usage:
+#   ./scripts/smooth-dem input.tif output.tif [dem_blur] [mask_blur] [slope_low] [slope_high]
+#
+#   dem_blur    ImageMagick blur for DEM:   "radiusxsigma" (default: 20x35)
+#   mask_blur   ImageMagick blur for masks: "radiusxsigma" (default: 40x35)
+#   slope_low   Slope below which DEM is fully blurred, degrees (default: 1)
+#   slope_high  Slope above which DEM is fully original, degrees (default: 5)
+
+set -euo pipefail
+source "$(dirname "$0")/config.sh"
+check_deps gdaldem gdal_translate gdal_calc.py gdalinfo convert
+
+INPUT_TIF="${1:?Usage: smooth-dem input.tif output.tif}"
+OUTPUT_TIF="${2:?Usage: smooth-dem input.tif output.tif}"
+DEM_BLUR="${3:-20x35}"
+MASK_BLUR="${4:-40x35}"
+SLOPE_LOW="${5:-1}"
+SLOPE_HIGH="${6:-5}"
+
+WORK="$(dirname "${OUTPUT_TIF}")"
+
+log "Slope-selective DEM smoothing (dem_blur=${DEM_BLUR}, mask_blur=${MASK_BLUR}, slope ${SLOPE_LOW}°–${SLOPE_HIGH}°)..."
+
+# Extract extent for restoring georeferencing after ImageMagick strips it.
+read -r ULX ULY LRX LRY < <(gdalinfo -json "${INPUT_TIF}" | jq -r '[
+  (.cornerCoordinates | .upperLeft[0], .upperLeft[1], .lowerRight[0], .lowerRight[1])
+] | @tsv')
+SRS=$(gdalsrsinfo -o proj4 "${INPUT_TIF}" 2>/dev/null | tr -d '\n')
+
+restore_georef() {
+  local src="$1" dst="$2"
+  gdal_translate -a_srs "${SRS}" -a_ullr "${ULX}" "${ULY}" "${LRX}" "${LRY}" \
+    "${src}" "${dst}" 2>/dev/null
+}
+
+# ─── Step 1: Shift DEM to UInt16 for ImageMagick ────────────────────────────
+# ImageMagick does not handle Float32 or negative values — offset so min = 0.
+MIN=$(gdalinfo -stats "${INPUT_TIF}" 2>/dev/null | grep -oE 'Minimum=[-0-9.]+' | cut -d= -f2)
+OFFSET=$(python3 -c "print(abs(float('${MIN}')))")
+
+log "  Shifting DEM by +${OFFSET} to UInt16 (land clamped to sea level)..."
+# Positive (land) values are clamped to the sea-level UInt16 value (OFFSET)
+# so they don't contaminate the blur of nearby ocean pixels at the coastline.
+gdal_calc.py -A "${INPUT_TIF}" \
+  --calc="numpy.where(A >= 0, ${OFFSET}, numpy.round(A + ${OFFSET})).astype(numpy.uint16)" \
+  --outfile="${WORK}/_sdem_offset.tif" \
+  --type=UInt16 --format=GTiff --quiet
+
+# ─── Step 2: Blur DEM with ImageMagick ──────────────────────────────────────
+log "  Blurring DEM (${DEM_BLUR})..."
+convert "${WORK}/_sdem_offset.tif" -blur "${DEM_BLUR}" "${WORK}/_sdem_blurred_raw.tif"
+restore_georef "${WORK}/_sdem_blurred_raw.tif" "${WORK}/_sdem_blurred_georef.tif"
+
+# Reverse offset
+gdal_calc.py -A "${WORK}/_sdem_blurred_georef.tif" \
+  --calc="A - ${OFFSET}" \
+  --outfile="${WORK}/_sdem_blurred.tif" \
+  --type=Float32 --format=GTiff --creation-option=COMPRESS=LZW --quiet
+
+# ─── Step 3: Compute slope map from original DEM ────────────────────────────
+log "  Computing slope..."
+gdaldem slope "${INPUT_TIF}" "${WORK}/_sdem_slope.tif" -compute_edges 2>/dev/null
+
+# ─── Step 4: Create steep and flat masks via color-relief ───────────────────
+log "  Building slope masks..."
+cat > "${WORK}/_sdem_steep_ramp.txt" <<EOF
+0       0   0   0
+${SLOPE_LOW}    0   0   0
+${SLOPE_HIGH}  255 255 255
+90    255 255 255
+EOF
+cat > "${WORK}/_sdem_flat_ramp.txt" <<EOF
+0     255 255 255
+${SLOPE_LOW}   255 255 255
+${SLOPE_HIGH}    0   0   0
+90     0   0   0
+EOF
+
+gdaldem color-relief "${WORK}/_sdem_slope.tif" "${WORK}/_sdem_steep_ramp.txt" \
+  "${WORK}/_sdem_steep_mask.tif" 2>/dev/null
+gdaldem color-relief "${WORK}/_sdem_slope.tif" "${WORK}/_sdem_flat_ramp.txt" \
+  "${WORK}/_sdem_flat_mask.tif" 2>/dev/null
+
+# ─── Step 5: Blur masks with ImageMagick ────────────────────────────────────
+log "  Blurring masks (${MASK_BLUR})..."
+convert "${WORK}/_sdem_steep_mask.tif" -blur "${MASK_BLUR}" "${WORK}/_sdem_steep_mask_raw.tif"
+convert "${WORK}/_sdem_flat_mask.tif"  -blur "${MASK_BLUR}" "${WORK}/_sdem_flat_mask_raw.tif"
+restore_georef "${WORK}/_sdem_steep_mask_raw.tif" "${WORK}/_sdem_steep_mask_blurred.tif"
+restore_georef "${WORK}/_sdem_flat_mask_raw.tif"  "${WORK}/_sdem_flat_mask_blurred.tif"
+
+# ─── Step 6: Blend ──────────────────────────────────────────────────────────
+log "  Blending..."
+gdal_calc.py \
+  -A "${INPUT_TIF}" \
+  -B "${WORK}/_sdem_blurred.tif" \
+  -C "${WORK}/_sdem_steep_mask_blurred.tif" --C_band=1 \
+  -D "${WORK}/_sdem_flat_mask_blurred.tif"  --D_band=1 \
+  --calc="numpy.where(A >= 0, A, (A * (C/255.0)) + (B * (D/255.0)))" \
+  --outfile="${OUTPUT_TIF}" \
+  --type=Float32 --format=GTiff \
+  --creation-option=COMPRESS=LZW --creation-option=TILED=YES \
+  --quiet
+
+# ─── Cleanup ─────────────────────────────────────────────────────────────────
+rm -f "${WORK}"/_sdem_*.tif "${WORK}"/_sdem_*.txt
+
+log "  → ${OUTPUT_TIF}"

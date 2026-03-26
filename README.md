@@ -24,7 +24,7 @@ sudo apt install gdal-bin python3-gdal python3-numpy jq bc
 ./scripts/pipeline.sh
 
 # Or for a regional extract (much faster for testing)
-BBOX="-80.5,20.9,-72.7,27.3" ./scripts/pipeline.sh
+BBOX="-85,20,-70,35" ./scripts/pipeline.sh
 ```
 
 ### Docker
@@ -36,7 +36,7 @@ docker build -t gebco-tiles .
 docker run --rm -v $(pwd)/data:/app/data -v $(pwd)/output:/app/output gebco-tiles
 
 # Regional extract (Bahamas)
-docker run --rm -e BBOX="-80.5,20.9,-72.7,27.3" \
+docker run --rm -e BBOX="-85,20,-70,35" \
   -v $(pwd)/data:/app/data -v $(pwd)/output:/app/output gebco-tiles
 ```
 
@@ -68,7 +68,7 @@ You can also drag any `.pmtiles` file into the [PMTiles Viewer](https://protomap
 | `scripts/pipeline.sh`              | Runs the full pipeline end to end                   |
 | `scripts/download.sh`              | Downloads GEBCO GeoTIFF (with optional BBOX clip)   |
 | `scripts/build-terrain-rgb.sh`     | Builds Terrain-RGB raster tiles (MBTiles + PMTiles) |
-| `scripts/generate-contours-fgb.sh` | Generates contour vector tiles (PMTiles)            |
+| `scripts/contour` | Generates contour vector tiles (PMTiles)            |
 | `scripts/smooth-contours.py`       | Chaikin corner-cutting smoothing for contour lines  |
 | `scripts/config.sh`                | Shared configuration (intervals, paths, helpers)    |
 
