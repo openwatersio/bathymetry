@@ -4,3 +4,4 @@ output/
 dist/
 .venv/
 node_modules
+.envrc
