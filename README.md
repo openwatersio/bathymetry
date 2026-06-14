@@ -13,12 +13,14 @@ Part of the [OpenWaters](https://github.com/openwatersio) project — building m
 
 ```bash
 # Install dependencies (macOS)
-brew install gdal tippecanoe jq rio
+brew install gdal tippecanoe pmtiles jq
+pip install rio-rgbify rasterio scipy
 
 # Or on Ubuntu/Debian
-sudo apt install gdal-bin python3-gdal python3-numpy jq bc
+sudo apt install gdal-bin python3-gdal python3-numpy python3-scipy python3-rasterio jq bc
+pip install rio-rgbify
 # tippecanoe: build from https://github.com/felt/tippecanoe
-# rio-rgbify: pip install rio-rgbify
+# pmtiles:    https://github.com/protomaps/go-pmtiles/releases
 
 # Run the full global pipeline (downloads ~4.2 GB)
 ./scripts/build
