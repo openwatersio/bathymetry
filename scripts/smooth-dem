@@ -93,6 +93,7 @@ gdal_calc.py \
   --outfile="${OUTPUT_TIF}" \
   --type=Float32 --format=GTiff \
   --creation-option=COMPRESS=LZW --creation-option=TILED=YES \
+  --creation-option=BIGTIFF=YES \
   --overwrite --quiet
 
 # ─── Cleanup ─────────────────────────────────────────────────────────────────
