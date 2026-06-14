@@ -10,8 +10,6 @@ RUN apt-get update && apt-get install -y \
     gdal-bin \
     python3-gdal \
     python3-numpy \
-    python3-scipy \
-    python3-rasterio \
     python3-pip \
     python3-venv \
     bc \
@@ -25,9 +23,15 @@ RUN apt-get update && apt-get install -y \
     git \
   && rm -rf /var/lib/apt/lists/*
 
-# Install rio-rgbify for Terrain-RGB encoding.
+# Install rio-rgbify (Terrain-RGB encoding) + scipy (scripts/blur) into a venv.
+# rio-rgbify pulls in NumPy 2.x and rasterio, so scipy must come from pip too —
+# the apt python3-scipy is built for NumPy 1.x and crashes under 2.x. rasterio
+# from pip also provides the `rio` CLI, so do NOT apt-install python3-rasterio
+# (system-site-packages would satisfy the dep and pip would skip it → no `rio`).
+# scripts/blur runs this venv python (first on PATH): numpy/scipy/rasterio from
+# pip here, gdal from system-site-packages.
 RUN python3 -m venv --system-site-packages /opt/rio-venv \
-  && /opt/rio-venv/bin/pip install --no-cache-dir rio-rgbify
+  && /opt/rio-venv/bin/pip install --no-cache-dir rio-rgbify scipy
 ENV PATH="/opt/rio-venv/bin:$PATH"
 
 # Install tippecanoe (Felt fork).
