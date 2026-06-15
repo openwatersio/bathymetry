@@ -162,6 +162,15 @@ mosaic of just GEBCO at GEBCO res. CUDEM (priority 1) → GEBCO+CUDEM at 3.4 m i
 CUDEM's bbox. This removes the base/region special-case from `build` (one loop)
 and lets you swap GEBCO→ETOPO or run base-less by editing config alone.
 
+**Also fixes the abrupt z9→z10 transition.** Today the base band (z0–9) is tiled
+from *pure GEBCO*, so inside a CUDEM footprint you see zero CUDEM until z10 — then
+at z10 both the resolution (~130×) and the dataset switch at once, so contours and
+shading jump rather than sharpen. Under the unified model the base tiles from a
+*base-resolution* priority mosaic (CUDEM downsampled to ~450 m over GEBCO), so z9
+already shows CUDEM-derived data and z9→z10 becomes a normal resolution bump of the
+same source. (This is the zoom-axis version of the bbox-edge seam; the
+base-resolution mosaic is exactly what item 2 above requires.)
+
 **Work items:**
 - `sources.conf` row gains `min_zoom`: `id|url|datum_offset|priority|bbox|min_zoom|max_zoom`,
   with `gebco | <zip-url> | 0 | 0 | -180,-85,180,85 | 0 | 9`.

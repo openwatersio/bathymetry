@@ -61,6 +61,12 @@ MIN_ZOOM="${MIN_ZOOM:-0}"
 SOURCES_CONF="${SOURCES_CONF:-${PROJECT_DIR}/scripts/sources.conf}"
 MOSAIC_VRT="${WORK_DIR}/mosaic.vrt"
 
+# OSM water polygons — contours are clipped to these so land/intertidal features
+# don't produce spurious lines (more accurate than the depth<0 filter alone).
+# Download: https://osmdata.openstreetmap.de/data/water-polygons.html
+# If absent, the contour step falls back to depth<0 only.
+WATER_POLYGONS="${WATER_POLYGONS:-${DATA_DIR}/water-polygons-split-4326/water_polygons.shp}"
+
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 log() { echo "[$(date '+%H:%M:%S')] $*" >&2; }
 
