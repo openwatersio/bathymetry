@@ -56,41 +56,37 @@ const style = {
       type: "color-relief",
       source: "terrain-dem",
       paint: {
+        // Banded light-blue ramp ported from seamap's bathymetry-relief layer.
         "color-relief-color": [
           "interpolate",
-          ["exponential", 0.8],
+          ["linear"],
           ["elevation"],
-          // Deep ocean — very subtle, just for context
-          -11000,
-          "#F0F4F8",
-          -6000,
-          "#E4EBF2",
-          -2000,
-          "#D4DFEA",
-          -200,
-          "#C0D0E0", // continental shelf edge
-          // Continental shelf
+          -10000,
+          "#bae7fe",
+          -50.1,
+          "#e9f7ff",
           -50,
-          "#90ABC8",
+          "#bae7fe",
+          -20.1,
+          "#bae7fe",
           -20,
-          "#7899BC", // ECDIS deep contour
-          -15,
-          "#6A8DB4", // Panamax draft + UKC
-          // Critical navigation zone
+          "#9adcfe",
+          -10.1,
+          "#9adcfe",
           -10,
-          "#5B80AC",
+          "#83d4fe",
+          -5.1,
+          "#83d4fe",
           -5,
-          "#4A72A2", // ECDIS safety contour
-          -3,
-          "#3A6498", // recreational draft limit
+          "#73cefe",
+          -2.1,
+          "#73cefe",
           -2,
-          "#2C5690",
-          -1,
-          "#1E4888",
+          "#68cafe",
+          -0.01,
+          "#68cafe",
+          // Land — transparent so the OSM base shows through (gebco-specific)
           0,
-          "#133C80", // chart datum
-          // Land — transparent so base map shows through
-          0.001,
           "rgba(0, 0, 0, 0)",
         ],
         "color-relief-opacity": 0.85,
@@ -114,18 +110,9 @@ const style = {
       source: "contours",
       "source-layer": "contours",
       paint: {
-        "line-color": "rgba(0, 20, 60, 0.2)",
-        "line-width": [
-          "step",
-          ["to-number", ["get", "depth_abs_m"]],
-          0.6, // < 50m
-          50,
-          0.8,
-          200,
-          1.0,
-          1000,
-          1.2,
-        ],
+        "line-color": "#777",
+        "line-width": 0.5,
+        "line-opacity": 0.33,
       },
     },
     {
@@ -138,15 +125,14 @@ const style = {
       layout: {
         "symbol-placement": "line",
         "text-field": ["concat", ["to-string", ["get", "depth_abs_m"]], "m"],
-        "text-size": 11,
+        "text-size": ["interpolate", ["linear"], ["zoom"], 8, 8, 13, 10],
         "text-font": ["Open Sans Regular"],
+        "text-letter-spacing": 0.1,
         "text-max-angle": 30,
         "text-padding": 50,
       },
       paint: {
-        "text-color": "rgba(0, 20, 60, 0.8)",
-        "text-halo-color": "rgba(255, 255, 255, 0.6)",
-        "text-halo-width": 1.5,
+        "text-color": "#777",
       },
     },
   ],
