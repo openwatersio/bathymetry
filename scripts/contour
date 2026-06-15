@@ -116,6 +116,15 @@ fi
 rm -f "${CONTOURS_RAW}" "${CONTOURS_SMOOTH}" "${CLIPPED_DEM:-}"
 [[ -n "${SKIP_SLOPE_SMOOTH}" ]] || rm -f "${SMOOTHED}"
 
+# All-land extents (e.g. an Antarctic shard) yield no ocean contours. tippecanoe
+# errors on empty input, so skip tiling and emit no band — the merge just unions
+# whatever bands exist.
+FEATURES=$(ogrinfo -al -so "${OUTPUT_FGB}" 2>/dev/null | awk '/Feature Count/{print $NF}')
+if [[ "${FEATURES:-0}" -eq 0 ]]; then
+  log "No ocean contours in this extent — skipping vector tiles."
+  exit 0
+fi
+
 # ─── Step 5: Tile to PMTiles ─────────────────────────────────────────────────
 # In banded mode (OUT_MBTILES set) tippecanoe writes an MBTiles band; build
 # tile-joins the bands into the final PMTiles.

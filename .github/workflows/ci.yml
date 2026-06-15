@@ -143,7 +143,10 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           AWS_DEFAULT_REGION: auto
         run: |
-          aws s3 cp "work/${{ matrix.step }}_${{ matrix.cell.id }}.mbtiles" \
+          BAND="work/${{ matrix.step }}_${{ matrix.cell.id }}.mbtiles"
+          # All-land contour shards produce no band — nothing to upload.
+          if [ ! -f "$BAND" ]; then echo "No band produced; skipping upload."; exit 0; fi
+          aws s3 cp "$BAND" \
             "s3://${{ secrets.R2_BUCKET }}/build/${{ github.sha }}/bands/${{ matrix.step }}_${{ matrix.cell.id }}.mbtiles" \
             --endpoint-url "https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com"
 
