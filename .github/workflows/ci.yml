@@ -146,11 +146,15 @@ jobs:
             "${IMAGE}:${{ github.sha }}" "$@"; }
           run download
           run ${{ matrix.step }}
-      - uses: actions/upload-artifact@v4
-        with:
-          name: band-${{ matrix.step }}-${{ matrix.cell.id }}
-          path: work/${{ matrix.step }}_${{ matrix.cell.id }}.mbtiles
-          if-no-files-found: error
+      - name: Upload band to R2 build
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+        run: |
+          aws s3 cp "work/${{ matrix.step }}_${{ matrix.cell.id }}.mbtiles" \
+            "s3://${{ secrets.R2_BUCKET }}/build/${{ github.sha }}/bands/${{ matrix.step }}_${{ matrix.cell.id }}.mbtiles" \
+            --endpoint-url "https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com"
 
   # Low zoom can't be sharded (a z0 tile spans the globe). Terrain is cheap from
   # the full DEM. Contour would regenerate every feature, so it runs on a
@@ -182,11 +186,15 @@ jobs:
           docker run --rm -e GEBCO_YEAR -e GEBCO_URL -e SPLIT_ZOOM \
             -v "${{ github.workspace }}/data:/app/data" -v "${{ github.workspace }}/work:/app/work" \
             "${IMAGE}:${{ github.sha }}" lowzoom ${{ matrix.step }}
-      - uses: actions/upload-artifact@v4
-        with:
-          name: band-${{ matrix.step }}-lowzoom
-          path: work/${{ matrix.step }}_lowzoom.mbtiles
-          if-no-files-found: error
+      - name: Upload band to R2 build
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+        run: |
+          aws s3 cp "work/${{ matrix.step }}_lowzoom.mbtiles" \
+            "s3://${{ secrets.R2_BUCKET }}/build/${{ github.sha }}/bands/${{ matrix.step }}_lowzoom.mbtiles" \
+            --endpoint-url "https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com"
 
   # Union all bands (low-zoom + cells) into one tileset per layer, then PMTiles.
   merge:
@@ -200,19 +208,41 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: actions/download-artifact@v4
-        with: { path: bands, pattern: band-*, merge-multiple: true }
+      - name: Fetch bands from R2 build
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+        run: |
+          mkdir -p bands
+          aws s3 sync "s3://${{ secrets.R2_BUCKET }}/build/${{ github.sha }}/bands/" bands/ \
+            --endpoint-url "https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com"
       - name: Merge bands → PMTiles
         run: |
           mkdir -p output
           docker run --rm \
             -v "${{ github.workspace }}/bands:/app/bands" -v "${{ github.workspace }}/output:/app/output" \
             "${IMAGE}:${{ github.sha }}" merge-bands /app/bands /app/output
-      - uses: actions/upload-artifact@v4
-        with:
-          name: tiles
-          path: output/*.pmtiles
-          if-no-files-found: error
+      # Final PMTiles stay in R2 keyed by commit, so publish is a server-side copy.
+      - name: Upload PMTiles to R2 build
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+        run: |
+          aws s3 cp output/ "s3://${{ secrets.R2_BUCKET }}/build/${{ github.sha }}/" \
+            --recursive --exclude '*' --include '*.pmtiles' \
+            --content-type application/octet-stream \
+            --endpoint-url "https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com"
+      - name: Clean up bands (keep PMTiles for publish)
+        if: always()
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+        run: |
+          aws s3 rm "s3://${{ secrets.R2_BUCKET }}/build/${{ github.sha }}/bands/" --recursive \
+            --endpoint-url "https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com"
 
   # The viewer references tiles by URL at runtime, so it builds independently.
   web:
@@ -241,19 +271,17 @@ jobs:
     needs: merge
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: tiles
-          path: artifacts
-      - name: Upload tiles to R2
+      # Promote the already-built PMTiles within R2 — server-side copy, no
+      # download/upload through the runner.
+      - name: Publish PMTiles to R2
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           AWS_DEFAULT_REGION: auto
         run: |
-          aws s3 cp artifacts/ "s3://${{ secrets.R2_BUCKET }}/gebco/${GEBCO_YEAR}/" \
+          aws s3 cp "s3://${{ secrets.R2_BUCKET }}/build/${{ github.sha }}/" \
+            "s3://${{ secrets.R2_BUCKET }}/gebco/${GEBCO_YEAR}/" \
             --recursive --exclude '*' --include '*.pmtiles' \
-            --content-type application/octet-stream \
             --endpoint-url "https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com"
 
   # Deploy the viewer to GitHub Pages.
