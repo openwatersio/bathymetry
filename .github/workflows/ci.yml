@@ -92,6 +92,11 @@ jobs:
         uses: jlumbroso/free-disk-space@main
         with:
           tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          swap-storage: true
 
       # Cache the downloaded GEBCO zip (~4.2 GB) keyed by year so re-runs skip
       # the curl. The download step re-extracts + clips from it each run.
