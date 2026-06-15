@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Union the per-band MBTiles (low-zoom + cells) into one PMTiles per layer.
+#
+# Bands are named <step>_<id>.mbtiles (e.g. terrain_x0y0, contour_lowzoom).
+# Terrain is raster — a real `tiles` table, disjoint tiles → merge-tiles sqlite
+# union. Contour is vector — tippecanoe writes `tiles` as a VIEW that can't be
+# sqlite-indexed → tile-join (straight to PMTiles). See SCALING.md.
+#
+# Usage: ./scripts/merge-bands <bands-dir> <out-dir>
+set -euo pipefail
+SCRIPT_DIR="$(dirname "$0")"
+source "${SCRIPT_DIR}/config.sh"
+check_deps pmtiles tile-join sqlite3
+
+BANDS="${1:?usage: merge-bands <bands-dir> <out-dir>}"
+OUT="${2:?need out dir}"
+mkdir -p "${OUT}"
+
+log "Merging terrain bands (sqlite union)..."
+"${SCRIPT_DIR}/merge-tiles" "${OUT}/terrain.mbtiles" "${BANDS}"/terrain_*.mbtiles >/dev/null
+pmtiles convert "${OUT}/terrain.mbtiles" "${OUT}/terrain.pmtiles" >&2
+
+log "Merging contour bands (tile-join)..."
+tile-join -f -o "${OUT}/contours.pmtiles" "${BANDS}"/contour_*.mbtiles >&2
+
+log "Merged: ${OUT}/terrain.pmtiles, ${OUT}/contours.pmtiles"

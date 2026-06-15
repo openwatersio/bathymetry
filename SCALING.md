@@ -94,7 +94,7 @@ hand-tuned 16.
 
 The ceiling: each cell re-pays fixed per-job cost (checkout + image pull + DEM
 clip/pull), and the merge job's fan-in grows with cell count. So finer isn't
-free — past some point the overhead dominates the work. `# ponytail: start at
+free — past some point the overhead dominates the work. `# start at
 16, then try 32–64 and compare wall-clock; stop when per-job overhead eats the
 gains.`
 
