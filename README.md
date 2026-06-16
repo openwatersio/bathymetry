@@ -51,9 +51,10 @@ The workflow at `.github/workflows/ci.yml`:
 - **On a published release** it promotes the bundles to Cloudflare R2 (`tiles.openwaters.io`), deploys the serving Worker, and ships the viewer to GitHub Pages.
 - **Manual runs** (Actions → Build → Run workflow) accept an optional `bbox` and shard count.
 
-Publishing requires these repository secrets: `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`,
-`R2_SECRET_ACCESS_KEY`, and `CLOUDFLARE_API_TOKEN` (for the Worker deploy). The R2
-bucket name (`openwaters-tiles`) is set in `ci.yml` / `worker/wrangler.toml`.
+Building/publishing requires these repository secrets: `R2_ACCOUNT_ID`,
+`R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`, and `CLOUDFLARE_API_TOKEN`
+(for the Worker deploy). The R2 token must have **Object Read & Write** on `R2_BUCKET`,
+and the Worker's binding (`worker/wrangler.toml` `bucket_name`) must name that same bucket.
 
 ## Data sources
 

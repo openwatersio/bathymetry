@@ -10,17 +10,28 @@ import os
 import subprocess
 from glob import glob
 
+import rasterio
 
-# Lossless float compression that's available in any GDAL build (DEFLATE +
-# float predictor). Avoids a hard dependency on the LERC codec, which the stock
-# GDAL CLI may lack (plan risk #6).
+
+# Lossless DEFLATE compression, available in any GDAL build (avoids a hard
+# dependency on the LERC codec the stock GDAL CLI may lack). The predictor is
+# chosen per file: 3 (floating-point) only works on Float32/64; integer rasters
+# (e.g. GEBCO's Int16) need 2 (horizontal differencing).
 COG_OPTS = ["-co", "BLOCKSIZE=512", "-co", "OVERVIEWS=NONE", "-co", "SPARSE_OK=YES",
-            "-co", "BIGTIFF=IF_NEEDED", "-co", "COMPRESS=DEFLATE", "-co", "PREDICTOR=3"]
+            "-co", "BIGTIFF=IF_NEEDED", "-co", "COMPRESS=DEFLATE"]
+
+
+def predictor_for(filepath):
+    with rasterio.open(filepath) as src:
+        dtype = src.dtypes[0]
+    if dtype in ("float32", "float64"):
+        return "3"
+    return "2" if "int" in dtype else "1"
 
 
 def normalize_file(filepath, crs, nodata):
     tmp = filepath + ".norm.tif"
-    cmd = ["gdal_translate", "-of", "COG", *COG_OPTS]
+    cmd = ["gdal_translate", "-of", "COG", *COG_OPTS, "-co", f"PREDICTOR={predictor_for(filepath)}"]
     if crs:
         cmd += ["-a_srs", crs]
     if nodata is not None:

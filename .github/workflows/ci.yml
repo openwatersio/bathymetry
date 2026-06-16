@@ -32,8 +32,9 @@ on:
 env:
   IMAGE: ghcr.io/${{ github.repository }}
   GEBCO_YEAR: "2026"
-  # Bucket the serving Worker reads from (its R2 binding in worker/wrangler.toml).
-  R2_BUCKET: openwaters-tiles
+  # The R2 bucket build state + published bundles live in. The serving Worker's
+  # R2 binding (worker/wrangler.toml `bucket_name`) must name this same bucket.
+  R2_BUCKET: ${{ secrets.R2_BUCKET }}
   AGG_SHARDS: ${{ github.event.inputs.shards || '24' }}
   BBOX: ${{ github.event.inputs.bbox || '' }}
   # R2 via the S3 API (aws-cli v2 honours AWS_ENDPOINT_URL).
