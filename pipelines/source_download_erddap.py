@@ -27,7 +27,7 @@ def main():
     for i, url in enumerate(config.file_list(source)):
         nc = f"store/source/{source}/{source}_{i}.nc"
         out = f"store/source/{source}/{source}_{i}.tif"
-        print(f"  [{i}] erddap subset {url} ({bbox}) -> {out}")
+        print(f"  [{i}] erddap subset {url} ({a.bbox}) -> {out}")
         utils.http_download(f"{url}.nc?{var}[({s}):({n})][({w}):({e})]", nc)
         subprocess.run(["gdal_translate", f"NETCDF:{nc}:{var}", out], check=True)
         os.remove(nc)
