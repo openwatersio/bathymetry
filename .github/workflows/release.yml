@@ -36,9 +36,17 @@ jobs:
             echo "::error::No build at build/$SHA/ — release/dispatch a commit that was built on main."
             exit 1
           fi
-          # --copy-props none: R2 has no GetObjectTagging, which the CLI calls by default on copy.
-          aws s3 cp "s3://$R2_BUCKET/build/$SHA/" \
-            "s3://$R2_BUCKET/bathymetry/" --recursive --exclude 'contour-shards/*' --copy-props none
+          set -o pipefail
+          # R2 has no object tagging, and the AWS CLI touches tags on every server-side copy.
+          # Multipart copies (the big files) survive with --copy-props none; a single-part
+          # CopyObject still sends x-amz-tagging-directive: REPLACE, which R2 rejects. Only
+          # manifest.json is below the multipart threshold and hits that path — round-trip it
+          # through the runner, where the upload sends no tagging header. Small future overlays
+          # would need the same; lower the threshold or switch to rclone if that happens.
+          aws s3 cp "s3://$R2_BUCKET/build/$SHA/" "s3://$R2_BUCKET/bathymetry/" \
+            --recursive --exclude 'contour-shards/*' --exclude 'manifest.json' --copy-props none
+          aws s3 cp "s3://$R2_BUCKET/build/$SHA/manifest.json" - \
+            | aws s3 cp - "s3://$R2_BUCKET/bathymetry/manifest.json" --content-type application/json
 
   # Deploy the serving Worker (reads bathymetry/ from the same R2 bucket).
   deploy-worker:
