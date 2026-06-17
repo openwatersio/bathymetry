@@ -3,8 +3,9 @@
 Blurs flat areas (abyssal plains, shelves) to cut noise-driven contour
 stairstepping while preserving steep detail (canyon walls, seamounts). Applied to
 each aggregation tile's merged DEM, so the raster encode and the contour fork
-share one smoothed surface. In-memory (the tile is bounded ≤32768px) — numpy
-slope + scipy gaussian, so no out-of-core windowing is needed here.
+share one smoothed surface. Processed in overlapping windows (halo = the gaussian
+truncation radius), so peak memory is one padded block, not the whole raster — a
+z14 macrotile is 32768px ≈ 4 GB/band, which a whole-array read would OOM.
 
 ponytail: sigma is in merged-DEM pixels, so the physical blur scale tracks the
 tile's zoom (coarse base tiles blur more in metres, fine regional tiles less) —
@@ -17,6 +18,7 @@ import os
 
 import numpy as np
 import rasterio
+from rasterio.windows import Window
 from scipy.ndimage import gaussian_filter
 
 NODATA = -9999
@@ -25,6 +27,8 @@ DEM_SIGMA = float(os.environ.get("SMOOTH_DEM_SIGMA", "4"))
 MASK_SIGMA = float(os.environ.get("SMOOTH_MASK_SIGMA", "4"))
 SLOPE_LOW = float(os.environ.get("SMOOTH_SLOPE_LOW", "1"))    # ≤ this slope (deg): fully blurred
 SLOPE_HIGH = float(os.environ.get("SMOOTH_SLOPE_HIGH", "5"))  # ≥ this slope: original kept
+BLOCK = int(os.environ.get("SMOOTH_BLOCK", "2048"))          # window side (px); caps peak memory
+TRUNCATE = 4.0                                               # gaussian_filter default kernel cutoff (σ)
 
 
 def smooth_array(dem, res, nodata=NODATA):
@@ -43,19 +47,33 @@ def smooth_array(dem, res, nodata=NODATA):
     return np.where(water, out, dem).astype("float32")  # land + nodata untouched
 
 
-def smooth_tiff(path):
+def smooth_tiff(path, block=None):
+    """Smooth a DEM in overlapping windows so peak memory is one padded block, not the
+    whole raster. The halo (gaussian truncation radius = TRUNCATE·σ, +1 for the gradient)
+    feeds each block real neighbours, so interior output is identical to a whole-array
+    smooth; only the true raster edge falls back to mode='nearest', exactly as before."""
+    block = block or BLOCK
+    halo = int(np.ceil(TRUNCATE * max(DEM_SIGMA, MASK_SIGMA))) + 1
     with rasterio.open(path) as src:
         profile = src.profile
-        dem = src.read(1)
         res = src.res[0]
         nodata = src.nodata if src.nodata is not None else NODATA
-    out = smooth_array(dem, res, nodata)
+        h_total, w_total = src.height, src.width
     # Re-write as a 512-blocked GTiff (aggregation_tile asserts 512 block shapes).
     profile.update(driver="GTiff", count=1, tiled=True, blockxsize=512, blockysize=512,
                    compress="deflate")
     tmp = path + ".smooth.tif"
-    with rasterio.open(tmp, "w", **profile) as dst:
-        dst.write(out, 1)
+    with rasterio.open(path) as src, rasterio.open(tmp, "w", **profile) as dst:
+        for row in range(0, h_total, block):
+            for col in range(0, w_total, block):
+                h = min(block, h_total - row)
+                w = min(block, w_total - col)
+                r0, c0 = max(0, row - halo), max(0, col - halo)
+                r1, c1 = min(h_total, row + h + halo), min(w_total, col + w + halo)
+                dem = src.read(1, window=Window(c0, r0, c1 - c0, r1 - r0))
+                out = smooth_array(dem, res, nodata)
+                dst.write(out[row - r0:row - r0 + h, col - c0:col - c0 + w], 1,
+                          window=Window(col, row, w, h))
     os.replace(tmp, path)
 
 
@@ -77,6 +95,23 @@ def _check():
     out = smooth_array(step, res=10.0)  # 1990 m over 10 m = near-vertical → steep, kept
     assert abs(out[:, 0].mean() - (-10)) < 1 and abs(out[:, -1].mean() - (-2000)) < 1, \
         (out[:, 0].mean(), out[:, -1].mean())
+
+    # windowed smooth_tiff must equal the whole-array smooth (halo correctness across seams)
+    import tempfile
+    from rasterio.transform import from_origin
+    big = (-3000 + rng.normal(0, 8, (600, 600))).astype("float32")
+    big[:, 300:] -= 1500  # a steep seam to stress slope+blur across many block edges
+    d = tempfile.mkdtemp()
+    p = f"{d}/m.tif"
+    with rasterio.open(p, "w", driver="GTiff", height=600, width=600, count=1,
+                       dtype="float32", nodata=NODATA, crs="EPSG:3857",
+                       transform=from_origin(0, 6000, 10, 10)) as dst:
+        dst.write(big, 1)
+    ref = smooth_array(big, 10.0)
+    smooth_tiff(p, block=128)  # tiny blocks → exercises many internal seams
+    with rasterio.open(p) as src:
+        got = src.read(1)
+    assert np.max(np.abs(got - ref)) < 1e-2, np.max(np.abs(got - ref))
     print("smooth.py self-check ok")
 
 
