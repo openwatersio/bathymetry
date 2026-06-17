@@ -2,22 +2,20 @@ name: Build
 
 # Build pipeline (see CONTRIBUTING.md / the port plan):
 #   image → sources (per-source matrix) → plan (cover + diff) → aggregate
-#   (sharded fan-out) → bundle → publish/worker/pages.
+#   (sharded fan-out) → bundle + contours. Releasing/deploying is release.yml.
 #
 # State lives in R2 under a single persistent prefix `store/` (the consolidated
 # pipelines/store dir) so rebuilds are incremental: `plan` diffs the new covering
 # against the previous one and only the changed aggregation tiles get rebuilt;
 # clean tiles' pmtiles/contours are reused straight from the store. Final bundles
-# land in build/<sha>/ and are promoted to bathymetry/<year>/ on release.
+# land in build/<sha>/; a release promotes that build (see release.yml).
 #
-# The heavy build runs on the default branch, releases, and manual dispatch only
-# (a shared incremental store shouldn't be mutated from every feature branch); any
-# branch can trigger a build via workflow_dispatch (optionally with a BBOX).
+# The heavy build runs on the default branch and manual dispatch only (a shared
+# incremental store shouldn't be mutated from every feature branch); any branch can
+# trigger a build via workflow_dispatch (optionally with a BBOX).
 
 on:
   push:
-  release:
-    types: [published]
   workflow_dispatch:
     inputs:
       bbox:
@@ -42,10 +40,10 @@ env:
   AWS_DEFAULT_REGION: auto
   AWS_ENDPOINT_URL: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
 
-# Supersede in-progress runs on the same branch — but never cancel a release.
+# Supersede in-progress runs on the same branch.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name != 'release' }}
+  cancel-in-progress: true
 
 jobs:
   # Build + push the toolchain image. buildx GHA cache → only recompiles when the
@@ -80,7 +78,7 @@ jobs:
           docker run --rm "$IMAGE:${{ github.sha }}" just test-engine
 
   # ─── Build (default branch + dispatch; NOT release — a release just republishes
-  # the build the commit already produced on main, see publish-r2) ───────────────
+  # the build the commit already produced on main, see release.yml) ──────────────
   # Enumerate the sources (one dir per source) into a matrix.
   discover:
     if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
@@ -343,7 +341,7 @@ jobs:
           aws s3 cp store/bundle/contours.pmtiles "s3://$R2_BUCKET/build/${{ github.sha }}/contours.pmtiles" \
             --content-type application/octet-stream
 
-  # The viewer references tiles by URL at runtime, so it builds independently.
+  # Compile-check the viewer (it's built + deployed on release; see release.yml).
   web:
     runs-on: ubuntu-latest
     steps:
@@ -351,61 +349,6 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: npm }
       - name: Build viewer
-        env:
-          # Released viewer points at the Worker (tiles.openwaters.io); otherwise
-          # the local default (localhost:8787).
-          VITE_TILES_BASE: ${{ github.event_name == 'release' && 'https://tiles.openwaters.io' || '' }}
         run: |
           npm ci
           npm run build
-      - uses: actions/upload-pages-artifact@v4
-        with: { path: dist }
-
-  # ─── Publish (releases only) ───────────────────────────────────────────────
-  # No rebuild — promote the build this commit already produced on main
-  # (build/<sha>/) to the served prefix (server-side copy). Release a commit that was
-  # built on main.
-  publish-r2:
-    if: github.event_name == 'release'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Promote build/${{ github.sha }} → bathymetry/
-        run: |
-          if ! aws s3 ls "s3://$R2_BUCKET/build/${{ github.sha }}/manifest.json" >/dev/null 2>&1; then
-            echo "::error::No build at build/${{ github.sha }}/ — release a commit that was built on main."
-            exit 1
-          fi
-          aws s3 cp "s3://$R2_BUCKET/build/${{ github.sha }}/" \
-            "s3://$R2_BUCKET/bathymetry/" --recursive --exclude 'contour-shards/*'
-
-  # Deploy the serving Worker (reads bathymetry/<year>/ from the same bucket).
-  deploy-worker:
-    if: github.event_name == 'release'
-    needs: publish-r2
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-node@v4
-        with: { node-version: 22 }
-      - name: wrangler deploy
-        working-directory: worker
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
-        run: |
-          npm ci
-          npx wrangler deploy --var "TILES_PREFIX:bathymetry/"
-
-  # Deploy the viewer to GitHub Pages.
-  deploy-pages:
-    if: github.event_name == 'release'
-    needs: web
-    runs-on: ubuntu-latest
-    permissions: { pages: write, id-token: write }
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    concurrency: { group: pages, cancel-in-progress: false }
-    steps:
-      - id: deployment
-        uses: actions/deploy-pages@v5
