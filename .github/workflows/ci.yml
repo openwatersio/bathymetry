@@ -31,7 +31,6 @@ on:
 
 env:
   IMAGE: ghcr.io/${{ github.repository }}
-  GEBCO_YEAR: "2026"
   # The R2 bucket build state + published bundles live in. The serving Worker's
   # R2 binding (worker/wrangler.toml `bucket_name`) must name this same bucket.
   R2_BUCKET: ${{ secrets.R2_BUCKET }}
@@ -123,7 +122,13 @@ jobs:
       - name: Free disk space
         if: steps.check.outputs.current != 'true' && matrix.source == 'gebco'
         uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # v1.3.1
-        with: { tool-cache: true, android: true, dotnet: true, haskell: true, large-packages: true, swap-storage: true }
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          swap-storage: true
       - name: Prepare ${{ matrix.source }}
         if: steps.check.outputs.current != 'true'
         run: |
@@ -189,8 +194,14 @@ jobs:
       # Dense-coast contour shards stage large FlatGeobufs.
       - name: Free disk space
         uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # v1.3.1
-        with: { tool-cache: true, android: true, dotnet: true, haskell: true, large-packages: true, swap-storage: true }
-      - name: Pull sources + covering from R2
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          swap-storage: true
+      - name: Pull covering from R2
         run: |
           mkdir -p store/aggregation store/pmtiles store/contour
           # Source COGs are NOT pulled — reproject range-reads them via /vsicurl from
@@ -225,7 +236,13 @@ jobs:
       - uses: ./.github/actions/ghcr-login
       - name: Free disk space
         uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # v1.3.1
-        with: { tool-cache: true, android: true, dotnet: true, haskell: true, large-packages: true, swap-storage: true }
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          swap-storage: true
       - name: Pull store from R2
         run: |
           mkdir -p store
@@ -276,7 +293,13 @@ jobs:
       - uses: ./.github/actions/ghcr-login
       - name: Free disk space
         uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # v1.3.1
-        with: { tool-cache: true, android: true, dotnet: true, haskell: true, large-packages: true, swap-storage: true }
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          swap-storage: true
       # Pull ONLY this shard's FGB slice (not the whole set). List the FGB keys
       # (sorted = the order Python globs), derive the global maxz (so every shard
       # tiles to the same depth and tile-joins cleanly), and parallel-copy the
@@ -343,10 +366,10 @@ jobs:
     needs: [bundle, contour-bundle]
     runs-on: ubuntu-latest
     steps:
-      - name: Promote bundles → bathymetry/${{ env.GEBCO_YEAR }}/
+      - name: Promote bundles → bathymetry/
         run: |
           aws s3 cp "s3://$R2_BUCKET/build/${{ github.sha }}/" \
-            "s3://$R2_BUCKET/bathymetry/${GEBCO_YEAR}/" --recursive --exclude 'contour-shards/*'
+            "s3://$R2_BUCKET/bathymetry/" --recursive --exclude 'contour-shards/*'
 
   # Deploy the serving Worker (reads bathymetry/<year>/ from the same bucket).
   deploy-worker:
@@ -364,7 +387,7 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
         run: |
           npm ci
-          npx wrangler deploy --var "TILES_PREFIX:bathymetry/${GEBCO_YEAR}/"
+          npx wrangler deploy --var "TILES_PREFIX:bathymetry/"
 
   # Deploy the viewer to GitHub Pages.
   deploy-pages:
