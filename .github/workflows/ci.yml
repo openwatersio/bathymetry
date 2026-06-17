@@ -259,17 +259,22 @@ jobs:
       - name: Free disk space
         uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # v1.3.1
         with: { tool-cache: true, android: true, dotnet: true, haskell: true, large-packages: true, swap-storage: true }
-      # Each shard pulls all FGBs (to derive the global maxz + its slice) and tiles
-      # only its slice. (Pulling all to every shard is the simple version; pull only
-      # the slice if FGB egress becomes the bottleneck.)
-      - name: Pull contour FGBs from R2
+      # Pull ONLY this shard's FGB slice (not the whole set). List the FGB keys
+      # (sorted = the order Python globs), derive the global maxz (so every shard
+      # tiles to the same depth and tile-joins cleanly), and parallel-copy the
+      # strided slice this shard owns.
+      - name: Pull this shard's FGB slice from R2
         run: |
           mkdir -p store/contour store/bundle
-          aws s3 sync "s3://$R2_BUCKET/store/contour" store/contour
-      - name: Contour shard ${{ matrix.shard.i }}/${{ matrix.shard.n }}
+          aws s3 ls "s3://$R2_BUCKET/store/contour/" --recursive | awk '{print $NF}' | grep '\.fgb$' | sort > /tmp/all.txt
+          sed 's#.*/##; s/\.fgb$//' /tmp/all.txt | awk -F- '{print $4}' | sort -n | tail -1 > store/contour-maxz.txt
+          awk -v i="${{ matrix.shard.i }}" -v n="${{ matrix.shard.n }}" 'NR % n == (i + 1) % n' /tmp/all.txt \
+            | xargs -P 8 -I{} aws s3 cp "s3://$R2_BUCKET/{}" store/contour/
+          echo "shard ${{ matrix.shard.i }}/${{ matrix.shard.n }}: $(ls store/contour/*.fgb 2>/dev/null | wc -l) FGBs, global maxz $(cat store/contour-maxz.txt)"
+      - name: Contour shard ${{ matrix.shard.i }}
         run: |
           docker run --rm -v "$PWD/store:/app/pipelines/store" \
-            "$IMAGE:${{ github.sha }}" just contour-shard ${{ matrix.shard.i }} ${{ matrix.shard.n }}
+            "$IMAGE:${{ github.sha }}" just contour-shard ${{ matrix.shard.i }}
       - name: Push shard pmtiles to R2
         run: |
           aws s3 cp store/bundle "s3://$R2_BUCKET/build/${{ github.sha }}/contour-shards/" \

@@ -47,13 +47,10 @@ combine:
 contours:
     uv run python contour_run.py bundle
 
-# Print the CI contour-shard matrix as JSON (<= max shards, sized to the FGB count).
-contour-matrix max:
-    @uv run python contour_run.py bundle-matrix {{max}}
-
-# tippecanoe one contour shard i of n (strided FGB slice -> contours-shard-{i}.pmtiles).
-contour-shard i n:
-    uv run python contour_run.py bundle-shard {{i}} {{n}}
+# tippecanoe this shard's local FGBs -> contours-shard-{i}.pmtiles (CI pulls only the
+# shard's slice + writes store/contour-maxz.txt; merged by contour-merge).
+contour-shard i:
+    uv run python contour_run.py bundle-shard {{i}}
 
 # tile-join the per-shard contour pmtiles into contours.pmtiles.
 contour-merge:

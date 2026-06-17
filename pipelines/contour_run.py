@@ -19,7 +19,6 @@ it hid GEBCO above z9 — not worth losing GEBCO at high zoom. Smoothing is the
 real seam mitigation.)
 """
 
-import json
 import os
 import subprocess
 import sys
@@ -152,34 +151,23 @@ def _global_maxz(fgbs):
     return max(int(f.split("/")[-1].replace(".fgb", "").split("-")[3]) for f in fgbs)
 
 
-def bundle(shard=None, n=None):
-    """tippecanoe the contour FGBs into pmtiles. Whole set by default; with (shard, n)
-    a strided FGB slice → contours-shard-{shard}.pmtiles for the CI fan-out (a single
-    global tippecanoe blows the 6 h job cap at planet scale). All shards use the GLOBAL
-    maxz so the per-shard pmtiles tile-join cleanly in bundle_merge()."""
+def bundle(shard=None):
+    """tippecanoe the local contour FGBs into pmtiles. Whole set (contours.pmtiles)
+    by default; with a shard index → contours-shard-{shard}.pmtiles, which
+    bundle_merge() tile-joins (a single global tippecanoe blows the 6 h job cap at
+    planet scale). The CI pulls only this shard's FGB slice and writes the GLOBAL maxz
+    to store/contour-maxz.txt, so every shard tiles to the same depth and tile-joins
+    cleanly; a local whole-set build derives maxz from the FGBs it has."""
     fgbs = sorted(glob("store/contour/*.fgb"))
     if not fgbs:
         print("contour bundle: no contour FGBs")
         return
-    maxz = _global_maxz(fgbs)
+    maxzfile = "store/contour-maxz.txt"
+    maxz = int(open(maxzfile).read().strip()) if os.path.isfile(maxzfile) else _global_maxz(fgbs)
     utils.create_folder("store/bundle")
-    if shard is None:
-        _tippecanoe(fgbs, 0, maxz, "store/bundle/contours.pmtiles")
-        print(f"contour bundle: store/bundle/contours.pmtiles (z0-{maxz}, {len(fgbs)} FGBs)")
-        return
-    part = fgbs[shard::n]
-    if not part:
-        print(f"contour shard {shard}/{n}: no FGBs in slice")
-        return
-    out = f"store/bundle/contours-shard-{shard}.pmtiles"
-    _tippecanoe(part, 0, maxz, out)
-    print(f"contour shard {shard}/{n}: {out} (z0-{maxz}, {len(part)} FGBs)")
-
-
-def bundle_matrix(maxshards):
-    """Print the CI contour-shard matrix JSON (<= maxshards, sized to the FGB count)."""
-    n = min(int(maxshards), max(len(glob("store/contour/*.fgb")), 1))
-    print(json.dumps([{"i": i, "n": n} for i in range(n)]))
+    out = "store/bundle/contours.pmtiles" if shard is None else f"store/bundle/contours-shard-{shard}.pmtiles"
+    _tippecanoe(fgbs, 0, maxz, out)
+    print(f"contour {'bundle' if shard is None else f'shard {shard}'}: {out} (z0-{maxz}, {len(fgbs)} FGBs)")
 
 
 def bundle_merge():
@@ -198,10 +186,8 @@ if __name__ == "__main__":
     if a[:1] == ["bundle"]:
         bundle()
     elif a[:1] == ["bundle-shard"]:
-        bundle(int(a[1]), int(a[2]))
-    elif a[:1] == ["bundle-matrix"]:
-        bundle_matrix(a[1])
+        bundle(int(a[1]))
     elif a[:1] == ["bundle-merge"]:
         bundle_merge()
     else:
-        sys.exit("usage: contour_run.py bundle | bundle-shard <i> <n> | bundle-matrix <max> | bundle-merge")
+        sys.exit("usage: contour_run.py bundle | bundle-shard <i> | bundle-merge")
