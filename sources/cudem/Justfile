@@ -1,0 +1,7 @@
+# NOAA CUDEM 1/9 arc-sec, all US coastal regions. Run from pipelines/:  just ../sources/cudem/
+# Streaming model: register every tile in NOAA's urllist as a /vsis3/ reference
+# (reads headers only — no 188 GB download). Aggregation range-reads the COGs from
+# S3. Tiles are already COGs (NAVD88 / NAD83), so no normalize/datum/tarball.
+[no-cd]
+default:
+    uv run python source_register_remote.py cudem

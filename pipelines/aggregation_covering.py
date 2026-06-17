@@ -92,6 +92,9 @@ def get_macrotile_map():
     clip = bbox_3857()
     for filepath in sorted(glob("store/source/*/bounds.csv")):
         source = filepath.split("/")[-2]
+        if not os.path.isfile(f"{config.SOURCES_DIR}/{source}/metadata.json"):
+            print(f"skipping orphan store/source/{source} (no sources/{source}/)")
+            continue
         cap = config.load_metadata(source).get("max_zoom")
         print(f"reading {filepath}... (max_zoom cap={cap})")
         with open(filepath) as f:

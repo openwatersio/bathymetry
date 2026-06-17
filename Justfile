@@ -69,7 +69,11 @@ preview:
     gdal_translate -q -projwin -74.30 40.80 -73.75 40.40 \
       ../data/gebco_2026_n90.0_s0.0_w-90.0_e0.0_geotiff.tif store/source/gebco/gebco_0.tif
     uv run python source_bounds.py gebco
-    [ -f store/source/cudem_ne/bounds.csv ] || just ../sources/cudem_ne/
+    # CUDEM via the streaming model: register manifest tiles as /vsis3/ refs (header
+    # reads only, no download), BBOX-prefiltered to the harbor; aggregation reads the
+    # COGs straight from NOAA S3. Proves the COG-in-R2 read path end to end.
+    [ -f store/source/cudem/bounds.csv ] || \
+      BBOX="-74.30,40.40,-73.75,40.80" uv run python source_register_remote.py cudem
     BBOX="-74.30,40.40,-73.75,40.80" just planet
     ../worker/seed.sh
 

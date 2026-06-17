@@ -1,255 +1,264 @@
-# Priority-Mosaic Plan — Multi-Source Bathymetry Tiles
+# Priority-Mosaic Plan — Multi-Source Bathymetry Coverage
 
 Goal: one terrain-RGB tileset + one contour tileset that uses **GEBCO 2026 as the
 global base** and **defers to higher-quality regional data where it exists**,
 extending to **deeper zoom only where the data supports it**.
 
-## Core idea
+> **Status (2026-06):** the *engine* described by the old version of this plan has
+> been rebuilt. The monolithic bash `scripts/` pipeline (VRT priority, disjoint
+> zoom bands, sqlite `INSERT OR IGNORE` union) is **retired**; the port to the
+> Python four-stage pipeline (`source → aggregation → downsampling → bundle`) +
+> serving Worker shipped in `000b53b`. See the port plan
+> (`~/.claude/plans/compiled-honking-toast.md`) for the why and [CLAUDE.md](CLAUDE.md)
+> for the as-built architecture. **This doc is now the source/coverage roadmap** —
+> which data goes in, at what priority and zoom, and what's left to add — not an
+> architecture doc.
 
-Two independent mechanisms, kept separate so neither gets complicated:
+## Core idea (as built)
 
-1. **Priority handled at the DEM level (a GDAL VRT).** `gdalbuildvrt` draws
-   later-listed sources on top. List sources worst→best; the best data wins per
-   pixel. This is "defer to higher quality" in one command. Datum offsets and
-   reprojection are baked into each source *before* mosaicking.
+The same two mechanisms the original plan called for, re-expressed in the new
+pipeline (both live in `pipelines/`, not `scripts/`):
 
-2. **Variable zoom handled by disjoint zoom bands.** The global base owns
-   **z0–9** (full extent). Each high-res region owns **z10+ within its bbox**.
-   Tiles are produced from the already-prioritized VRT, so merging tilesets is a
-   near-trivial union (`INSERT OR IGNORE` on MBTiles / `tile-join` for vector) —
-   overlapping tiles are byte-identical, conflicts are impossible.
+1. **Priority handled in the aggregation merge.** Per aggregation tile,
+   `aggregation_run.py` reprojects each source into a merged Float32 DEM, drawing
+   higher-priority sources on top and letting lower ones fill nodata, with a
+   Gaussian seam feather. "Defer to higher quality" is now a deterministic merge,
+   not `gdalbuildvrt`. **Priority is *derived*, not configured:** `(maxzoom, id)`
+   — GEBCO has the smallest maxzoom so it loses everywhere a regional source
+   overlaps; ties break lexically on id.
 
-The existing `terrain` and `contour` scripts run **unchanged** on the VRT. The
-new work is: normalize sources, build the VRT, tile per zoom-band, union.
+2. **Variable zoom handled by a planet cap + per-source overlays + a Worker.**
+   The all-sources-merged base is complete to `macrotile_z` (`PLANET_MAX_ZOOM`,
+   currently GEBCO-native ~z8) in `planet.pmtiles`. Each high-res source's deeper
+   tiles bundle into a `<source>.pmtiles` overlay (carrying the GEBCO-filled
+   mosaic — Terrarium has no transparency, so overlays must not punch holes). The
+   `worker/` Cloudflare Worker resolves per tile: z≤cap → planet; z>cap covered →
+   overlay; else → overzoom the planet. One endpoint, no global GEBCO upsampling,
+   no holes. This **supersedes** the old "disjoint zoom bands + byte-identical
+   union into one pmtiles" model.
 
-## Source priority (worst → best, last wins)
+Terrain encode is **Terrarium + per-zoom quantization** (`encode.py`), not
+`rio-rgbify`. Contours run as a parallel consumer of the same merged DEM
+(`contour_run.py`); cross-tile line continuity comes from **buffer the DEM input,
+restrict the tile output**.
 
-| Priority | Source   | Native res | Zoom ceiling | Coverage        | Datum   |
-| -------- | -------- | ---------- | ------------ | --------------- | ------- |
-| 0 (base) | GEBCO 2026 | ~450 m   | z9           | global          | MSL     |
-| 1        | EMODnet 2024 | ~115 m | z11          | European seas   | LAT (confirm) |
-| 2        | DDM (Denmark) | 50 m  | z12          | Danish EEZ      | MSL (DKMSL2022) |
-| 3        | CUDEM    | ~3–10 m    | z13–14       | US coast        | NAVD88  |
-| 3        | BlueTopo | 2–16 m     | z14–15       | US navigable    | MLLW    |
-| 1        | NIWA NZ  | 250 m      | z10          | NZ EEZ          | varies  |
+## Source ingest: `/vsicurl/` streaming over public buckets ✅ DONE (CI verify pending)
+
+The problem CUDEM surfaced: source bytes land **twice** — once when the source step
+downloads them, then again when *every* aggregate shard `aws s3 sync`s the whole
+`store/source` from R2 before reprojecting. GEBCO+EMODnet+DDM are tens of GB (fits),
+but CUDEM's ~188 GB blows both. The fix, generalized to every source: **reproject
+range-reads each source COG over public HTTPS via GDAL `/vsicurl/` — nothing lands
+in bulk.** Because both buckets are public, there are *no credentials in the read
+path*, which sidesteps the one real trap (a global `AWS_NO_SIGN_REQUEST` for NOAA
+would break signed R2 reads — so everything is `/vsicurl`, never `/vsis3`).
+
+Two source shapes, one read path:
+
+- **Already-COG public bucket (CUDEM):** `source_register_remote.py` reads each tile's
+  *header* via `/vsicurl/` and writes its `bounds.csv` row with the full `/vsicurl/`
+  NOAA URL as the filename. No download, no normalize, no tarball.
+- **Prepared sources (GEBCO/EMODnet/DDM):** the source stage still fetches → unzips →
+  bakes transforms (DDM `negate`, etc.) → writes a local COG → and the **existing CI
+  step already uploads `store/source/<id>` to R2**. `bounds.csv` keeps basenames; at
+  aggregate time `SOURCE_VSI_BASE=/vsicurl/https://tiles.openwaters.io/store/source`
+  resolves them to public-R2 URLs.
+
+[`config.source_path`](pipelines/config.py) resolves all three cases (full `/vsi` path
+→ verbatim; `SOURCE_VSI_BASE` set → R2 URL; else local disk), so **local dev reads
+from disk unchanged** while CI streams. The CI aggregate job **drops the
+`aws s3 sync …/store/source`** entirely. COG internal tiling + overviews make the range
+reads cheap; **R2 has zero egress** so CI reads are free; builds decouple from
+NOAA/EMODnet/SDFI/CEDA uptime. Single-grid sources (GEBCO, DDM) have no *subset* win
+but still shed the per-shard local copy.
+
+**Validated locally:** `just preview` builds GEBCO(local)+CUDEM(`/vsicurl` NOAA) end to
+end (`store/source/cudem` = 4 KB `bounds.csv`, 51 MB cudem overlay), and a real GEBCO
+COG reads from public R2 via `/vsicurl/` (header + `gdalbuildvrt`, the reproject path).
+Remaining: a CI run to confirm the aggregate shards read R2/NOAA without the source
+sync. The per-source **tarball** is now redundant for streaming sources (the COG in its
+bucket is the artifact) — leave for now, prune later.
+
+## Source priority (worst → best, finer res wins)
+
+| Source       | Native res | Zoom ceiling | Coverage      | Datum          | Status |
+| ------------ | ---------- | ------------ | ------------- | -------------- | ------ |
+| GEBCO 2026   | ~450 m     | ~z8 (cap)    | global        | MSL            | ✅ source #0 |
+| EMODnet 2024 | ~115 m     | z11          | European seas | LAT (confirm)  | ✅ ingest (58-tile) |
+| DDM (Denmark)| 50 m       | z12          | Danish EEZ    | MSL (DKMSL2022)| ✅ ingest (`--negate`) |
+| CUDEM 1/9    | ~3.4 m     | z13          | US coast      | NAVD88         | ✅ `cudem` (942-tile manifest) |
+| BlueTopo     | 2–16 m     | z14–15       | US navigable  | MLLW           | ⬜ not built |
+| CUDEM 1/3    | ~10 m      | z11–12       | US coast (broader) | NAVD88    | ⬜ optional coarse fill |
+| CUDEM terr.  | ~3.4 m     | z13          | HI/PR/USVI/Guam/AmSam/CNMI | NAVD88 | ⬜ own products |
+| NIWA NZ      | 250 m      | z10          | NZ EEZ        | varies         | ⬜ not built |
 
 Zoom ceilings are display caps, not native res (BlueTopo's 2 m ≈ z18; we cap
-where it stops being worth the tile count). Tune per region. Priority = finer
-res wins in overlap; only matters where footprints overlap (e.g. DDM over EMODnet
-in Danish waters). **DDM stores positive depth** (not negative elevation), so its
-ingest must negate values — see Phase 2.
+where it stops being worth the tile count) — set per source via the optional
+`max_zoom` in `metadata.json`, else inferred from pixel size. Priority is derived
+from `(maxzoom, id)`; the explicit column is gone. **Open risk:** DDM and EMODnet
+must keep DDM winning in Danish waters — if their inferred maxzooms tie, the
+lex-on-id tiebreak (`ddm` < `emodnet`) happens to favor DDM, but a real source
+ever sorting wrong needs a manual tiebreaker (port-plan risk #3). **DDM stores
+positive depth** → its recipe runs `source_datum.py --negate`.
 
 ---
 
-## Phase 0 — Pivot to GEBCO base (done / trivial)
+## Phase 0 — GEBCO base ✅ DONE
 
-GEBCO 2026 is already the configured source and is the best global grid today
-(SWOT+ML deep ocean, newer than ETOPO 2022). No global ETOPO layer. Nothing to
-build here beyond confirming `DATASET`/source naming — fold into Phase 1.
+GEBCO 2026 is the configured global grid and the best today (SWOT+ML deep ocean,
+newer than ETOPO 2022). It's `sources/gebco/` — source #0, no special-casing.
 
----
+## Phase 1 — Source abstraction + single-region proof ✅ DONE (superseded)
 
-## Phase 1 — Source abstraction + single-region prototype ✅ DONE
-
-Prove the whole pattern end to end with GEBCO global + **one** CUDEM region.
-
-**Implemented:** `scripts/sources.conf`, `scripts/ingest`, `scripts/mosaic`,
-`scripts/merge-tiles`; `terrain`/`contour` take `MIN_ZOOM` + `OUT_MBTILES`
-(banded mode); `scripts/build` orchestrates (no sources → original GEBCO-only
-build, unchanged). Viewer auto-detects terrain maxzoom from the PMTiles header.
-
-**Validated with real data** — NOAA CUDEM 1/9 arc-sec (~3.4 m) coastal Georgia
-tile over GEBCO 2025:
-- Priority: in-tile the mosaic returns CUDEM's −5.18 m over GEBCO's −6 m; outside
-  the tile GEBCO shows through. (gdalbuildvrt needs homogeneous band types —
-  `mosaic` promotes all sources to Float32 VRTs to mix Int16 GEBCO + Float32 CUDEM.)
-- Zoom bands: merged terrain has base z0–9 (full extent) + z10–13 only over the
-  CUDEM tile (56 tiles at z13), no loss/collision. Raster via sqlite union,
-  contours via tile-join. One 3.7 MB terrain + 1 MB contour PMTiles.
-
-**Notes / next-phase hooks:**
-- `sources.conf` ships with the verified CUDEM row active. `./scripts/build`
-  produces the mosaic; CI is untouched because `ci.yml` calls `terrain`/`contour`
-  directly (never `build`), so released tiles stay GEBCO-only until Phase 2 wires
-  the source bands into CI + the R2 mirror.
-- Smoothing (`smooth-dem`/`smooth-contours`) needs both rasterio and osgeo, which
-  only coexist in Docker's `--system-site-packages` venv — run the full pipeline
-  via the Docker image, or `SKIP_SLOPE_SMOOTH=1 SKIP_CHAIKIN=1` for a local
-  smoke test.
-
-**Work items**
-
-- `scripts/sources.conf` — one row per source: `id|url|crs|datum_offset_m|priority|bbox|min_zoom|max_zoom`. Plain text, sourced by bash. (ponytail: a config file, not a registry abstraction.)
-- `scripts/ingest <source-id>` — download → `gdalwarp` to EPSG:4326 → apply constant `datum_offset_m` (`gdal_calc.py -A ... --calc="A+off"`) → set nodata outside the data footprint → write `work/<id>_norm.tif`. One code path; format quirks handled by per-source `case` branches as they're added.
-- `scripts/mosaic` — `gdalbuildvrt` over the normalized sources **ordered by priority ascending** → `work/mosaic.vrt`. The VRT is virtual, so this is instant and cheap.
-- Extend `scripts/terrain` and `scripts/contour` to accept `MIN_ZOOM` (default 0) alongside `MAX_ZOOM`, and to take the VRT as input. Already accept `BBOX`.
-- `scripts/merge-tiles <out.mbtiles> <in...>` — raster: `sqlite3` ATTACH + `INSERT OR IGNORE INTO tiles`, merge `metadata` maxzoom. Vector: `tile-join` (handles this natively). Then one `pmtiles convert` at the end.
-- `scripts/build` orchestration: ingest each source → mosaic → tile base (full extent, z0–9) → tile each region (its bbox, z10–maxz) → merge → convert.
-
-**Output:** `output/terrain.pmtiles`, `output/contours.pmtiles` — GEBCO everywhere, CUDEM detail + deep zoom over the US East Coast.
-
-**Validation:** open in the viewer; confirm (a) seamless GEBCO at z0–9, (b) CUDEM tiles appear at z10+ only in-bbox, (c) no tile-key collisions (`pmtiles show`), (d) a known shoal reads correct depth via `queryTerrainElevation`.
+The original bash prototype proved priority + zoom-bands end to end with GEBCO +
+one CUDEM region (CUDEM's −5.18 m winning over GEBCO's −6 m in-tile; z10–13 only
+over the CUDEM footprint, no collisions). That validation **carried into the
+rewrite** and the bash prototype was retired. The same property is now exercised
+by `just preview` (GEBCO + CUDEM NY-harbor) and `just test-engine`.
 
 ---
 
-## Phase 2 — European coverage: EMODnet + DDM (~3–5 days)
+## Phase 2 — European coverage: EMODnet + DDM 🟡 INGEST DONE, CUTOVER PENDING
 
-**This is the immediate goal:** replace the GEBCO/EMODnet/DDM bathymetry dropdown
-in [openwatersio/seamap](https://github.com/openwatersio/seamap) with one unified,
-self-hosted mosaic — and drop the maptoolkit.net CDN + client-side
-maplibre-contour the seamap viewer currently uses (`viewer/src/main.js`). Both
-high-res sources are single-file or near-single-file, so this is the *easy* path —
-no multi-tile machinery needed (that's deferred to Phase 3 / US coverage).
+**The goal:** replace the GEBCO/EMODnet/DDM bathymetry dropdown in
+[openwatersio/seamap](https://github.com/openwatersio/seamap) with one unified,
+self-hosted mosaic served by the Worker — dropping the maptoolkit.net CDN +
+client-side maplibre-contour the seamap viewer uses today. The mosaic makes three
+picks one: GEBCO base, EMODnet over European seas (z11), DDM over Danish waters
+(z12), best-wins.
 
-The dropdown today offers three picks; the mosaic makes them one: GEBCO global
-base, EMODnet over European seas (z11), DDM over Danish waters (z12), best-wins.
+**Done:** `sources/emodnet/` (58-tile ERDDAP file_list → the source stage's
+multi-file download handles it) and `sources/ddm/` (single GeoTIFF, EPSG:3034,
+`--negate` for positive-down depth, `--crs`). Both prepare in CI's per-source
+matrix and feed the aggregation merge.
 
-**Sources**
+**Remaining**
 
-- **EMODnet 2024** — one NetCDF from ERDDAP (`EMODnet_bathymetry_2024.nc`, the
-  recipe is already in `seamap/emodnet.txt`). ~115 m, European seas. `ingest`
-  gains a `.nc` case: `gdal_translate NETCDF:"…":elevation` → existing warp path.
-  Datum is **LAT** (confirm) — set `datum_offset_m` so it doesn't seam vs GEBCO.
-- **DDM (Denmark's Depth Model 2024)** — GeoTIFF download from SDFI/Dataforsyningen
-  (EPSG:3034, ~50 m, Danish EEZ). Vertical datum **MSL** (DKMSL2022) — matches
-  GEBCO, offset ~0. Two quirks: it's **positive depth**, so ingest must negate
-  (`-1 ×`) to get elevation; and EPSG:3034 reprojects to 4326 via the existing
-  proj4 `-s_srs` path. Highest-res of the three → top priority in its footprint.
+- **Global GEBCO planet build at scale.** Seamap is global, so the base must be
+  built planet-wide. The four-stage pipeline + R2-backed incremental rebuild is
+  the mechanism ([SCALING.md](SCALING.md)); a full planet run is the gate.
+- **Seam check** where EMODnet/DDM meet GEBCO — confirm the LAT/MSL datum offsets
+  don't seam at native zoom; the merge's Gaussian feather hides the visual seam.
+  Constant offset + feather for now; VDatum (Phase 5) only where a seam shows.
+- **Seamap viewer cutover** (in the *seamap* repo, not here): point its raster-dem
+  + vector-contour layers at the Worker endpoint, drop the dropdown +
+  client-side contours. This is the actual ship.
+- **CI R2 mirror** of EMODnet/ERDDAP + DDM/SDFI so runners don't re-fetch each
+  build (the per-source cache + R2 store already exist; confirm the heavy sources
+  are mirrored).
 
-**Work items**
-
-- `ingest`: add a NetCDF-subdataset case and a per-source value transform (negate
-  for DDM). The `datum_offset_m` column already covers the constant shift; add a
-  sign/scale only where needed (DDM).
-- **Global GEBCO base** — seamap is global, so the base must be built planet-wide,
-  not just regionally. That's the [SCALING.md](SCALING.md) sharded-build work; it's
-  a prerequisite for shipping, tracked separately.
-- **Seam feathering** where EMODnet/DDM meet GEBCO — `gdalwarp` cutline blend, or
-  accept hard cuts where invisible. `# ponytail: constant offset + hard cut, add
-  feather/VDatum (Phase 5) only where a seam actually shows`.
-- **CI (`ci.yml`)**: extend the `tiles` matrix to build + merge the source bands;
-  mirror EMODnet/DDM to R2 (runners shouldn't pull ERDDAP/SDFI each run).
-- **seamap viewer**: swap the three `mlcontour.DemSource`s for one `pmtiles://`
-  raster-dem (shading/hillshade) + the pre-rendered vector contour layer; delete
-  the dropdown (or keep it as a single "best available"). Off maptoolkit, off
-  client-side contours.
-
-**Output:** GEBCO base + EMODnet (z11) + DDM (z12), one terrain + one contour
-PMTiles on R2, consumed by seamap.
-
-**Validation:** build a European preview (e.g. Danish + adjacent waters so DDM,
-EMODnet, and GEBCO all appear), confirm DDM wins over EMODnet wins over GEBCO,
-check the LAT/MSL offsets don't seam, spot-check depths.
+**Validation:** a European preview (Danish + adjacent waters so DDM, EMODnet,
+GEBCO all appear) — DDM wins over EMODnet wins over GEBCO; offsets don't seam;
+spot-check depths.
 
 ---
 
-## Phase 3 — US coverage: CUDEM + BlueTopo (multi-tile ingest) (~1–2 weeks)
+## Phase 3 — US coverage: CUDEM + BlueTopo 🟡 CUDEM INGEST DONE
 
-US sources, deferred until after the European goal ships. This is where the
-**multi-tile ingest** machinery gets built (European sources didn't need it).
+**CUDEM is now one unified `cudem` source** (replacing the old per-window
+`cudem_ne`/`cudem_puget`). Its `file_list.txt` points at NOAA's **manifest**
+(`urllist8483.txt`) rather than data files; `source_register_remote.py` reads each
+tile's header and registers it as a `/vsicurl/` reference (see [Source ingest](#source-ingest-vsicurl-streaming-over-public-buckets))
+— **no download**; aggregation range-reads the COGs straight off NOAA. Confirmed by
+direct S3 inspection of `s3://noaa-nos-coastal-lidar-pds/dem/NCEI_ninth_Topobathy_2014_8483/`:
 
-**The problem:** CUDEM isn't one file — hundreds of 0.25°×0.25° tiles across
-regional dirs (southeast, northeast_sandy, …), ~190 MB each, tens of GB. BlueTopo
-is similar but worse: per-tile UTM zones (cross-zone mosaic), a GeoPackage tile
-index, 3-band rasters, and MLLW chart datum.
+- **942 tiles, ~188 GB, 1/9 arc-second (~3.4 m)** — the only CUDEM resolution that
+  integrates bathy **and** topo. 0.25° tile grid, NAVD88 vertical / NAD83
+  (EPSG:4269) horizontal, NoData −9999. The index/manifest was regenerated
+  2026-04-21, so the catalog is current (tiles are the 2014 CONUS epoch; newer
+  fidelity lives in scattered per-project `CoNED_*`/`NGS_*Topobathy*` dirs → own
+  sources, Phase 5).
+- ⚠️ **The master `.vrt` is incomplete** — `…_EPSG-4269.vrt` (339 tiles) and
+  `…_1.vrt` (591 tiles) are complementary *halves*, and the master alone omits the
+  entire Southeast, Texas, Chesapeake, AL/NW-FL, and New England. `urllist8483.txt`
+  (942 tiles) is the **only complete enumeration** — hence pointing the source at
+  it, not the VRT.
 
-**Work items**
+**18 regional subdirs collapse to 4 coasts** (the natural grouping):
 
-- **Multi-tile `ingest`:** let a source `url` resolve to *many* tiles — a `.vrt`,
-  glob, or bucket listing — `gdalbuildvrt` into one DEM before warp+offset.
-  Single-file sources (Phase 2) keep working unchanged.
-- **Tile enumeration:** list `s3://noaa-nos-coastal-lidar-pds/dem/` (CUDEM) /
-  `s3://noaa-ocs-nationalbathymetry-pds/` (BlueTopo) rather than scraping HTML.
-  Note: CUDEM's 2014 master VRT omits newer subdirs (e.g. `southeast/`) — those
-  need a per-subdir VRT.
-- **Datum:** CUDEM NAVD88 (~0), BlueTopo **MLLW** (real offset; VDatum in Phase 5).
-- **R2 mirror** the regions you want; add `cudem_*` / `bluetopo_*` rows.
+| Group    | Subdirs |
+| -------- | ------- |
+| Atlantic | northeast_sandy, MA_NH_ME, chesapeake_bay, NC, southeast, rima, FL(atl) |
+| Gulf     | TX, LA_MS, AL_nwFL, FL(gulf) |
+| Pacific  | CA, OR, columbia_river, wash_pugetsound, wash_outercoast, wash_juandefuca, wash_bellingham |
+| Alaska   | AK |
 
-**Output:** + US coastal coverage at z13–15.
+Kept as **one source** for now: every tile shares resolution (→ z13), datum,
+provider, and processing, so splitting buys nothing for priority/merge — it's
+purely operational (CI cache granularity, per-overlay `.pmtiles` size). Splitting
+later is just partitioning the manifest into per-coast `file_list.txt`s — trivial
+when a real constraint forces it.
 
-**Validation:** a multi-tile region mosaics without gaps; total size stays sane
-(sparse high-zoom over coasts only); depths match known soundings.
+**Remaining**
+
+- ✅ **Disk reality → solved by `/vsicurl/` streaming.** 188 GB won't fit a standard
+  GitHub runner (~14 GB). Resolved by the [`/vsicurl/` streaming](#source-ingest-vsicurl-streaming-over-public-buckets)
+  model: CUDEM is registered as `/vsicurl/` NOAA references (no download) and the
+  aggregate job no longer syncs `store/source`, so the 188 GB never lands. Validated
+  on the harbor preview; CI confirmation pending.
+- **BlueTopo (new format work):** per-tile UTM zones (cross-zone mosaic), a
+  GeoPackage tile index, 3-band rasters, **MLLW** chart datum (real offset; VDatum
+  in Phase 5). `s3://noaa-ocs-nationalbathymetry-pds/`. Likely a new
+  `source_download_*` variant + a metadata band-select knob.
+- **Optional CUDEM extensions:** the **1/3 arc-sec** product (`NCEI_third_Topobathy_2014_8580`,
+  ~10 m, broader/cheaper) as a coarse fill where 1/9 is absent; the **territory**
+  products (Hawaii, PuertoRico, USVI, Guam, AmSam, CNMI — each its own
+  `NCEI_ninth_Topobathy_*` manifest) as additional `cudem_*` sources reusing the
+  same `source_download_filelist` step.
+
+**Validation:** a multi-region US build mosaics without gaps (esp. across the
+master-VRT-omitted Southeast/Gulf); total bundle size stays sane (sparse high-zoom
+over coasts only); depths match known soundings.
 
 ---
 
-## Phase 4 — Unify GEBCO as just another source (~1 hour refactor)
+## Phase 4 — Unify GEBCO as just another source ✅ DONE (free)
 
-Today GEBCO is special-cased as "the base" in `build` (separate `download`, base
-band tiled from the base-res DEM, regions tiled from the mosaic). It's different
-in three ways — but only one is incidental:
-
-1. **Fetch** (real): GEBCO is a ~4 GB zip → extract → maybe VRT-mosaic sub-tiles
-   → ±85° clamp. Other sources are a single `curl` of a GeoTIFF/COG.
-2. **Tiling resolution** (real): the base band must tile from a *base-resolution*
-   DEM. Tiling z0–9 from the `-resolution highest` mosaic (3.4 m globally once
-   CUDEM is in it) would downsample a 3.4 m global grid — absurd.
-3. **Zoom band + bbox** (incidental): base = z0–9 full extent, regions = z10+ in
-   a bbox. This is just config — a `min_zoom` and a global bbox.
-
-**Unified model:** each source tiles from *the priority mosaic of everything ≤
-its priority, at its own resolution, clipped to its bbox*. GEBCO (priority 0) →
-mosaic of just GEBCO at GEBCO res. CUDEM (priority 1) → GEBCO+CUDEM at 3.4 m in
-CUDEM's bbox. This removes the base/region special-case from `build` (one loop)
-and lets you swap GEBCO→ETOPO or run base-less by editing config alone.
-
-**Also fixes the abrupt z9→z10 transition.** Today the base band (z0–9) is tiled
-from *pure GEBCO*, so inside a CUDEM footprint you see zero CUDEM until z10 — then
-at z10 both the resolution (~130×) and the dataset switch at once, so contours and
-shading jump rather than sharpen. Under the unified model the base tiles from a
-*base-resolution* priority mosaic (CUDEM downsampled to ~450 m over GEBCO), so z9
-already shows CUDEM-derived data and z9→z10 becomes a normal resolution bump of the
-same source. (This is the zoom-axis version of the bbox-edge seam; the
-base-resolution mosaic is exactly what item 2 above requires.)
-
-**Work items:**
-- `sources.conf` row gains `min_zoom`: `id|url|datum_offset|priority|bbox|min_zoom|max_zoom`,
-  with `gebco | <zip-url> | 0 | 0 | -180,-85,180,85 | 0 | 9`.
-- `ingest` branches on URL type — `.zip` → today's `download` logic; else the
-  current curl+warp. Either way it outputs a normalized DEM. `download` is
-  absorbed into `ingest`.
-- `mosaic` builds a per-source ≤-priority VRT at that source's resolution.
-- `build` becomes one loop (ingest → tile `[min_zoom,max_zoom]` over bbox →
-  merge); `REGION_MIN_Z` and the dead no-sources branch both disappear.
-
-**Honest caveat:** this *relocates* the specialness (zip fetch → an `ingest`
-branch) rather than removing it; net lines are about the same. The win is
-conceptual — one uniform pipeline, swappable base, config as the single source of
-truth. Do it once the source set is stable (Phases 2–3), so the refactor isn't
-chasing a moving target.
+The rewrite delivered this: GEBCO is `sources/gebco/` (source #0), tiled by the
+same `source → aggregation` path as every other source; the base/region
+special-case from the old `build` is gone, and swapping the base (GEBCO→ETOPO) or
+running base-less is a source-dir change. The old "abrupt z9→z10" worry is also
+gone — the planet cap tiles every source *downsampled into the merged base*, so
+the cap-zoom tile inside a regional footprint already shows that source.
 
 ---
 
 ## Phase 5 — Fidelity & ops (ongoing, as needed)
 
-- **Proper VDatum vertical transforms** replacing constant offsets, where Phase 2–3 seams prove inadequate.
-- **GEBCO TID-based quality masking** — prefer measured cells over interpolated when blending.
+- **Proper VDatum vertical transforms** replacing constant offsets, where Phase
+  2–3 seams prove inadequate. The seam is isolated in `source_datum.py` — swap the
+  constant for a spatially-varying separation grid in that one step.
+- **GEBCO TID-based quality masking** — prefer measured cells over interpolated
+  when blending (would also feed a per-pixel provenance band off the merge).
+- **Source-footprint provenance layer** — tile straight from the coverage polygons
+  the source stage already generates; "which source covers here," free, anytime.
 - **NOAA CSB** crowdsourced fill; **GLOBathy** lakes (separate inland layer).
 - **Auto-refresh** as sources update (GEBCO annual, others irregular).
 
-Pull these in only when a concrete need appears — most users won't notice the
-difference between a constant offset and full VDatum at these zooms.
+Pull these in only when a concrete need appears — most users won't notice a
+constant offset vs full VDatum at these zooms.
 
 ---
 
-## What does *not* change
+## What does *not* change from the original intent
 
-- `terrain` (rio-rgbify), `contour` (gdal_contour → tippecanoe), smoothing, color
-  ramp, encoding — all operate on whatever DEM the VRT hands them.
-- Viewer: still one `terrain.pmtiles` + one `contours.pmtiles`. Only bump the
-  source `maxzoom` so MapLibre requests the deeper regional tiles.
-- Distribution: single PMTiles per layer on R2, same as today.
+- One terrain tileset + one contour tileset, GEBCO everywhere + regional detail
+  where data supports it. (Now served *through the Worker* as planet + overlays,
+  not a single merged file per layer.)
+- Adding a source is config + a recipe, never engine surgery — now a `sources/<id>/`
+  dir (`metadata.json` + `file_list.txt` + `Justfile`) instead of a `sources.conf`
+  row.
+- The hard, open-ended work (datum normalization, format adapters, seams) stays
+  isolated in the source stage (`source_datum.py`, `source_download_*.py`) and
+  deferred to the sources that need it.
 
 ## Effort summary
 
-| Phase | Scope                          | Effort      |
-| ----- | ------------------------------ | ----------- |
-| 0     | GEBCO base confirmed           | ~0          |
-| 1     | Abstraction + 1-region proof   | 1–2 days    |
-| 2     | European: EMODnet + DDM (seamap) | 3–5 days  |
-| 3     | US: CUDEM + BlueTopo (multi-tile) | 1–2 weeks |
-| 4     | Unify GEBCO as a source        | ~1 hour     |
-| 5     | VDatum, CSB, lakes, refresh    | ongoing     |
-
-Phase 1 reuses the entire existing pipeline; the only genuinely hard, open-ended
-work (datum normalization, format adapters, seams) is isolated in `ingest` and
-deferred to Phases 2–3.
+| Phase | Scope                              | Status |
+| ----- | ---------------------------------- | ------ |
+| 0     | GEBCO base                         | ✅ done |
+| 1     | Abstraction + 1-region proof       | ✅ done (rewritten) |
+| 2     | European: EMODnet + DDM (seamap)   | 🟡 ingest done; planet build + seamap cutover left |
+| 3     | US: CUDEM full + BlueTopo          | 🟡 CUDEM unified source done; CI disk strategy + BlueTopo left |
+| 4     | Unify GEBCO as a source            | ✅ done (free) |
+| 5     | VDatum, TID, provenance, CSB, lakes| ongoing |

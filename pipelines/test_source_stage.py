@@ -29,7 +29,21 @@ def run(tmp, *args):
                    cwd=tmp, env=env, check=True)
 
 
+def check_remote_parsers():
+    """source_register_remote's URL/name parsing — the bits that bit us (mixed
+    n39x00/n25X75 case, .shx sidecars in the manifest, virtual-host vs s3:// URLs)."""
+    import source_register_remote as r
+    assert r.to_vsicurl("https://noaa-nos-coastal-lidar-pds.s3.amazonaws.com/dem/X/t.tif") \
+        == "/vsicurl/https://noaa-nos-coastal-lidar-pds.s3.amazonaws.com/dem/X/t.tif"
+    assert r.to_vsicurl("s3://b/k/t.tif") == "/vsicurl/https://b.s3.amazonaws.com/k/t.tif"
+    assert r.tile_lonlat("ncei19_n39x00_w075x25_2014v1.tif") == (-75.25, 39.0)
+    assert r.tile_lonlat("ncei19_n25X75_w080X25_2018v1.tif") == (-80.25, 25.75)  # uppercase X
+    assert r.tile_lonlat("southeast_topobathy_19.shx") is None  # sidecar, unparseable
+    print("remote parsers ok")
+
+
 def main():
+    check_remote_parsers()
     tmp = tempfile.mkdtemp()
     try:
         sid = "_synth"

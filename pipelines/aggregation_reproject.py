@@ -18,7 +18,12 @@ import mercantile
 import numpy as np
 import rasterio
 
+import config
 import utils
+
+# Streaming sources (CUDEM off NOAA, the locally-prepared sources off public R2) are
+# all read via /vsicurl over public HTTPS — no credentials in the read path, so no
+# AWS env to set here. config.source_path resolves each filename to its /vsicurl URL.
 
 SILENT = True
 NODATA = -9999
@@ -34,7 +39,7 @@ def create_virtual_raster(tmp_folder, i, source_items):
     listpath = f"{tmp_folder}/{i}-file-list.txt"
     with open(listpath, "w") as f:
         for item in source_items:
-            f.write(f'store/source/{source}/{item["filename"]}\n')
+            f.write(config.source_path(source, item["filename"]) + "\n")
     utils.run_command(f"gdalbuildvrt -overwrite -input_file_list {listpath} {vrt}", silent=SILENT)
     return vrt
 

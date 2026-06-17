@@ -31,6 +31,28 @@ def load_metadata(source):
         return json.load(f)
 
 
+def source_path(source, filename):
+    """A bounds.csv ``filename`` resolved to a GDAL-openable path. Three forms:
+
+    1. The filename is already a full ``/vsi`` path (a streaming source like CUDEM,
+       registered straight off a public bucket) — use it verbatim.
+    2. ``SOURCE_VSI_BASE`` is set (the CI aggregate job reading prepared COGs from
+       public R2) — resolve ``<base>/<source>/<filename>``, e.g.
+       ``/vsicurl/https://tiles.openwaters.io/store/source/gebco/gebco_0.tif``.
+    3. Otherwise (local dev) — ``store/source/<source>/<filename>`` on disk.
+
+    So locally-prepared sources stream from R2 in CI yet read from disk locally,
+    with no change to how they're prepared. Everything is public ``/vsicurl`` — no
+    credentials in the read path.
+    """
+    if filename.startswith("/vsi"):
+        return filename
+    base = os.environ.get("SOURCE_VSI_BASE")
+    if base:
+        return f"{base}/{source}/{filename}"
+    return f"store/source/{source}/{filename}"
+
+
 def file_list(source):
     path = f"{SOURCES_DIR}/{source}/file_list.txt"
     if not os.path.isfile(path):

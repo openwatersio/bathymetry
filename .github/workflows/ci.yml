@@ -192,15 +192,19 @@ jobs:
         with: { tool-cache: true, android: true, dotnet: true, haskell: true, large-packages: true, swap-storage: true }
       - name: Pull sources + covering from R2
         run: |
-          mkdir -p store/source store/aggregation store/pmtiles store/contour
-          aws s3 sync "s3://$R2_BUCKET/store/source" store/source
+          mkdir -p store/aggregation store/pmtiles store/contour
+          # Source COGs are NOT pulled — reproject range-reads them via /vsicurl from
+          # public R2 (and CUDEM from public NOAA). Only the covering + pmtiles keys.
           aws s3 sync "s3://$R2_BUCKET/store/aggregation" store/aggregation
           # Same pmtiles listing the plan used, so shards re-derive the identical
           # dirty set (changed tiles + any whose pmtiles is missing).
           aws s3 ls "s3://$R2_BUCKET/store/pmtiles/" --recursive | awk '{print $4}' > store/pmtiles-keys.txt || true
       - name: Aggregate shard ${{ matrix.shard.i }}/${{ matrix.shard.n }}
         run: |
+          # SOURCE_VSI_BASE → reproject resolves each source tile to a public /vsicurl
+          # URL on R2 instead of a local store/source path. No credentials needed.
           docker run --rm -v "$PWD/store:/app/pipelines/store" \
+            -e SOURCE_VSI_BASE="/vsicurl/https://tiles.openwaters.io/store/source" \
             "$IMAGE:${{ github.sha }}" just aggregate ${{ matrix.shard.i }} ${{ matrix.shard.n }}
       - name: Push tiles + contours + done-markers to R2
         run: |
