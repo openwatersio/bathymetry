@@ -143,6 +143,10 @@ jobs:
           aws s3 sync "s3://$R2_BUCKET/store/source" store/source --exclude '*' --include '*/bounds.csv'
           # …plus the prior covering(s) so the dirty-diff has something to compare to.
           aws s3 sync "s3://$R2_BUCKET/store/aggregation" store/aggregation
+          # …and the list of already-built pmtiles, so the diff rebuilds any covering
+          # tile whose artifact is missing (self-heal — coverings are pushed before
+          # the tiles exist, so a failed prior build can leave gaps the diff trusts).
+          aws s3 ls "s3://$R2_BUCKET/store/pmtiles/" --recursive | awk '{print $4}' > store/pmtiles-keys.txt || true
       - name: Cover
         run: docker run --rm -e BBOX -v "$PWD/store:/app/pipelines/store" "$IMAGE:${{ github.sha }}" just cover
       - name: Push covering to R2
@@ -177,6 +181,9 @@ jobs:
           mkdir -p store/source store/aggregation store/pmtiles store/contour
           aws s3 sync "s3://$R2_BUCKET/store/source" store/source
           aws s3 sync "s3://$R2_BUCKET/store/aggregation" store/aggregation
+          # Same pmtiles listing the plan used, so shards re-derive the identical
+          # dirty set (changed tiles + any whose pmtiles is missing).
+          aws s3 ls "s3://$R2_BUCKET/store/pmtiles/" --recursive | awk '{print $4}' > store/pmtiles-keys.txt || true
       - name: Aggregate shard ${{ matrix.shard.i }}/${{ matrix.shard.n }}
         run: |
           docker run --rm -v "$PWD/store:/app/pipelines/store" \

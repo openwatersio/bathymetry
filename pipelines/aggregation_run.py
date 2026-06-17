@@ -48,16 +48,40 @@ def run(filepath):
     print(f"{item} end")
 
 
+def existing_pmtiles():
+    """Basenames of pmtiles already in the store. From a CI-provided listing
+    (store/pmtiles-keys.txt = the R2 keys) when present, else a local scan."""
+    keyfile = "store/pmtiles-keys.txt"
+    if os.path.isfile(keyfile):
+        with open(keyfile) as f:
+            return {line.strip().split("/")[-1] for line in f if line.strip()}
+    return {p.split("/")[-1] for p in glob("store/pmtiles/**/*.pmtiles", recursive=True)}
+
+
 def dirty_filepaths():
-    """Sorted aggregation CSVs to (re)build: all on the first run, else the diff
-    vs the previous covering; minus any already marked .done."""
+    """Sorted aggregation CSVs to (re)build: tiles whose covering changed since the
+    previous run (all on the first run) PLUS any whose pmtiles is missing; minus any
+    already marked .done. The missing-pmtiles check is load-bearing: `plan` pushes
+    coverings to R2 before aggregate builds them, so a prior failed build can leave a
+    covering with no tile — without this the diff would call it clean forever."""
     aggregation_ids = utils.get_aggregation_ids()
     aggregation_id = aggregation_ids[-1]
+    all_csvs = sorted(glob(f"store/aggregation/{aggregation_id}/*-aggregation.csv"))
     if len(aggregation_ids) < 2:
-        dirty = sorted(glob(f"store/aggregation/{aggregation_id}/*-aggregation.csv"))
+        changed = set(all_csvs)
     else:
         names = utils.get_dirty_aggregation_filenames(aggregation_id, aggregation_ids[-2])
-        dirty = sorted(f"store/aggregation/{aggregation_id}/{name}" for name in names)
+        changed = {f"store/aggregation/{aggregation_id}/{name}" for name in names}
+
+    have = existing_pmtiles()
+
+    def needs_build(csv):
+        if csv in changed:
+            return True
+        pmtiles = csv.split("/")[-1].replace("-aggregation.csv", "") + ".pmtiles"
+        return pmtiles not in have
+
+    dirty = [fp for fp in all_csvs if needs_build(fp)]
     return [fp for fp in dirty if not os.path.isfile(fp.replace("-aggregation.csv", "-aggregation.done"))]
 
 
