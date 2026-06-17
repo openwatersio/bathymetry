@@ -9,9 +9,12 @@ through — no credentials, so it coexists with the signed-free R2 reads of loca
 sources). No normalize (tiles are already COGs with CRS + nodata), no polygonize/tarball
 (a streaming source has no local bytes to redistribute).
 
-Two enumeration shapes pick a front-end CLI, each resolving a list of tile URLs then calling
-``register_tiles`` here: a flat text urllist (``source_register_remote_urllist``, CUDEM) or a
-tile-scheme GeoPackage (``source_register_remote_geopkg``, BlueTopo).
+Two enumeration shapes pick a front-end CLI. A flat text urllist
+(``source_register_remote_urllist``, CUDEM) has no per-tile metadata, so it
+``register_tiles`` — opening each header to read bounds + size. A tile-scheme GeoPackage
+(``source_register_remote_geopkg``, BlueTopo) already *is* the index (footprint geometry +
+resolution per tile), so it derives the bounds rows itself and calls ``write_bounds`` directly,
+skipping ~7k header round-trips.
 """
 
 import os
@@ -38,24 +41,33 @@ def bounds_3857(src):
     return left, bottom, right, top
 
 
-def register_tiles(source, urls):
-    """Read each tile's header via /vsicurl and write store/source/<source>/bounds.csv
-    (filename = the /vsicurl path, plus 3857 bounds + pixel size). The covering re-filters
-    precisely from these bounds, so a generous upstream BBOX prefilter is fine."""
+def write_bounds(source, rows):
+    """Write store/source/<source>/bounds.csv from rows of
+    (vsicurl_path, left, bottom, right, top, width, height) — bounds in EPSG:3857. The covering
+    re-filters precisely from these bounds, so a generous upstream BBOX prefilter is fine."""
     os.makedirs(f"store/source/{source}", exist_ok=True)
-    lines = ["filename,left,bottom,right,top,width,height\n"]
+    with open(f"store/source/{source}/bounds.csv", "w") as f:
+        f.write("filename,left,bottom,right,top,width,height\n")
+        for path, left, bottom, right, top, width, height in rows:
+            f.write(f"{path},{left},{bottom},{right},{top},{width},{height}\n")
+    print(f"{source}: wrote {len(rows)} tiles to bounds.csv")
+
+
+def register_tiles(source, urls):
+    """Header-read each tile via /vsicurl -> 3857 bounds + pixel size -> bounds.csv. For sources
+    with no metadata index (a flat urllist, e.g. CUDEM); a GeoPackage-indexed source builds rows
+    from the index and calls write_bounds directly, skipping these per-tile reads."""
+    rows = []
     for i, url in enumerate(urls):
         path = to_vsicurl(url)
         with rasterio.open(path) as src:
             if src.crs is None:
                 sys.exit(f"crs not defined on {path}")
             left, bottom, right, top = bounds_3857(src)
-            lines.append(f"{path},{left},{bottom},{right},{top},{src.width},{src.height}\n")
+            rows.append((path, left, bottom, right, top, src.width, src.height))
         if (i + 1) % 100 == 0:
-            print(f"  registered {i + 1}/{len(urls)}")
-    with open(f"store/source/{source}/bounds.csv", "w") as f:
-        f.writelines(lines)
-    print(f"{source}: registered {len(urls)} remote tiles")
+            print(f"  read {i + 1}/{len(urls)} headers")
+    write_bounds(source, rows)
 
 
 def _check():

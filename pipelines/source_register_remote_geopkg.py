@@ -5,12 +5,17 @@ unpopulated → null link, dropped).
 ``file_list.txt`` holds either the tile-scheme prefix (``…/_BlueTopo_Tile_Scheme/`` — the
 newest dated ``.gpkg`` under it is resolved via one public S3 list) or a direct ``.gpkg`` URL.
 ``BBOX`` (W,S,E,N lon/lat) pushes an OGR spatial filter on the tile geometry — BlueTopo tile
-names aren't lat/lon-encoded, so geometry is the only prefilter. See ``source_remote`` for the
-streaming model; ``source_register_remote_urllist`` is the flat-urllist variant.
+names aren't lat/lon-encoded, so geometry is the only prefilter.
+
+The gpkg already *is* the index, so ``bounds.csv`` is built straight from it — footprint
+geometry → 3857 bounds, ``Resolution`` → pixel size — with **no per-tile header reads** (7.4k
+``/vsicurl`` round-trips would take ~40 min). See ``source_remote`` for the streaming model;
+``source_register_remote_urllist`` is the header-read flat-urllist variant (CUDEM).
 
 Run from pipelines/:  uv run python source_register_remote_geopkg.py <source-id>
 """
 
+import math
 import os
 import re
 import sys
@@ -19,7 +24,7 @@ import geopandas as gpd
 import requests
 
 import config
-from source_remote import register_tiles
+from source_remote import to_vsicurl, write_bounds
 
 
 def _newest_key(list_xml):
@@ -44,19 +49,41 @@ def newest_gpkg(prefix_url):
     return f"{host}/{key}"
 
 
-def gpkg_tile_urls(gpkg_url, bbox):
-    """Tile COG URLs from a tile-scheme GeoPackage: the GeoTIFF_Link of each *populated* feature.
-    ``bbox`` (W,S,E,N lon/lat) pushes an OGR spatial filter (gpkg geometry is WGS84) so a regional
-    build reads only nearby rows."""
+def _populated_mask(links):
+    """Boolean mask of populated tiles. pandas reads a NULL GeoTIFF_Link as float NaN — and
+    ``bool(nan)`` is True — so test for a non-empty *string*, not bare truthiness. (~5k of
+    BlueTopo's ~12.7k tiles are unpopulated.)"""
+    return [isinstance(u, str) and bool(u) for u in links]
+
+
+def _dims(ext_x_3857, ext_y_3857, lat, res_m):
+    """Pixel width/height from a tile's 3857 extent + native metre resolution. 3857 metres are
+    stretched ~1/cos(lat) vs ground metres, so the cos-corrected extent / resolution reproduces
+    the pixel count a COG header would report — keeping the covering's maxzoom inference identical
+    to the header-read path, without opening the tile."""
+    cos = math.cos(math.radians(lat))
+    return max(1, round(ext_x_3857 * cos / res_m)), max(1, round(ext_y_3857 * cos / res_m))
+
+
+def gpkg_bounds(gpkg_url, bbox):
+    """Build bounds.csv rows straight from the tile-scheme GeoPackage — no per-tile header reads.
+    The gpkg indexes every tile (footprint geometry + Resolution + GeoTIFF_Link), so 3857 bounds
+    come from reprojecting the footprint and pixel size from ``_dims``. ``bbox`` (W,S,E,N lon/lat)
+    pushes an OGR spatial filter (gpkg geometry is WGS84) so a regional build reads only nearby rows."""
     gdf = gpd.read_file("/vsicurl/" + gpkg_url, bbox=tuple(bbox) if bbox else None)
-    return _populated_links(gdf["GeoTIFF_Link"])
-
-
-def _populated_links(links):
-    """Drop unpopulated tiles. pandas reads a NULL GeoTIFF_Link as float NaN — and
-    ``bool(nan)`` is True — so a bare ``if u`` lets NaN through and ``u.lower()`` later
-    blows up. Keep only non-empty strings. (~5k of BlueTopo's ~12.7k tiles are unpopulated.)"""
-    return [u for u in links if isinstance(u, str) and u]
+    gdf = gdf[_populated_mask(gdf["GeoTIFF_Link"])]
+    if gdf.empty:
+        return []
+    lat = gdf.geometry.representative_point().y          # tile center latitude (WGS84)
+    b = gdf.geometry.to_crs(3857).bounds                 # vectorized reproject -> minx,miny,maxx,maxy
+    rows = []
+    for url, la, l, bot, r, t, resstr in zip(
+            gdf["GeoTIFF_Link"], lat, b["minx"], b["miny"], b["maxx"], b["maxy"], gdf["Resolution"]):
+        m = re.search(r"\d+(?:\.\d+)?", str(resstr))     # "16m" -> 16; default coarse if absent
+        res_m = float(m.group()) if m else 16.0
+        w, h = _dims(r - l, t - bot, la, res_m)
+        rows.append((to_vsicurl(url), l, bot, r, t, w, h))
+    return rows
 
 
 def main():
@@ -66,13 +93,12 @@ def main():
     bbox = os.environ.get("BBOX", "").strip()
     bbox = [float(x) for x in bbox.split(",")] if bbox else None
 
-    urls = []
+    rows = []
     for manifest in config.file_list(source):
         gpkg = newest_gpkg(manifest) if manifest.endswith("/") else manifest
         print(f"reading tile-scheme gpkg {gpkg}")
-        urls += gpkg_tile_urls(gpkg, bbox)
-    urls = [u for u in urls if u.lower().endswith((".tif", ".tiff"))]
-    register_tiles(source, urls)
+        rows += gpkg_bounds(gpkg, bbox)
+    write_bounds(source, rows)
 
 
 def _check():
@@ -85,8 +111,11 @@ def _check():
     )
     assert _newest_key(sample).endswith("20260616_191529.gpkg"), _newest_key(sample)
     assert _newest_key("<ListBucketResult/>") is None
-    # unpopulated tiles read as float NaN (truthy!) — must be dropped, not .lower()'d
-    assert _populated_links(["a.tif", "", float("nan"), "b.tiff"]) == ["a.tif", "b.tiff"]
+    # unpopulated tiles read as float NaN (truthy!) — must be masked out, not .lower()'d
+    assert _populated_mask(["a.tif", "", float("nan"), "b.tiff"]) == [True, False, False, True]
+    # pixel size: at the equator 3857 == ground; at 60°N (cos ½) a tile is half the px per 3857 m
+    assert _dims(1000, 1000, 0.0, 10.0) == (100, 100)
+    assert _dims(1000, 1000, 60.0, 10.0) == (50, 50)
     print("source_register_remote_geopkg.py self-check ok")
 
 
