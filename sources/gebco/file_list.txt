@@ -1,2 +1,4 @@
 # GEBCO 2026 global grid, GeoTIFF zip (~4.2 GB)
-https://dap.ceda.ac.uk/bodc/gebco/global/gebco_2026/ice_surface_elevation/geotiff/gebco_2026_geotiff.zip
+# https://dap.ceda.ac.uk/bodc/gebco/global/gebco_2026/ice_surface_elevation/geotiff/gebco_2026_geotiff.zip
+# The official URL is not accessible from GitHub Actions, so here's a mirror:
+https://data.openwaters.io/bathymetry/mirror/gebco_2026_geotiff.zip
