@@ -77,6 +77,19 @@ Key knobs (env vars, read by `pipelines/utils.py` / `bundle.py`):
 `SMOOTH_DEM_SIGMA`/`SMOOTH_SLOPE_LOW`/`SMOOTH_SLOPE_HIGH`, `SKIP_SMOOTH`,
 `SKIP_CONTOURS`, `SKIP_CONTOUR_SMOOTH`.
 
+## In the container
+
+The `Dockerfile` bundles the full toolchain (GDAL, tippecanoe, the `uv` env), so you
+can run the pipeline without installing native deps locally:
+
+```bash
+docker build -t bathymetry .
+docker run --rm -v "$(pwd)/pipelines/store:/app/pipelines/store" \
+  bathymetry just planet          # or: just source <id> / just sources
+```
+
+Set `BBOX="W,S,E,N"` for a regional build; `just --list` shows all recipes.
+
 ## Adding a source
 
 1. Create `sources/<id>/`:
@@ -109,7 +122,21 @@ and caches it. Overlays carry GEBCO-fill (Terrarium has no transparency, so a
 source's nodata would otherwise punch holes over the base).
 
 - Local: `npm run seed` (from `worker/`, populates the local sim R2 from `pipelines/store/bundle/`) then `npm run dev`.
-- Production: `npm run deploy` (set the R2 bucket + `TILES_PREFIX` in `wrangler.toml`).
+- Production: `npm run deploy` (set the R2 bucket + `RELEASE_PREFIX` in `wrangler.toml`).
+
+## CI / build & release
+
+`.github/workflows/ci.yml` (build) and `release.yml` (publish + deploy):
+
+- **Every push** builds the toolchain image and runs the offline self-checks (`test-sources`, `test-engine`); the viewer builds too.
+- **Default branch / manual dispatch** runs the full build: prepare each source (matrix) → plan the covering and diff it against the previous run → aggregate the changed tiles (sharded across runners) → bundle planet + overlays + contours + manifest. Build state and per-commit bundles persist in the public **data bucket** (`data.openwaters.io`) under `bathymetry/`, so rebuilds are incremental. Manual runs (Actions → Build → Run workflow) accept an optional `bbox` and shard count.
+- **On a published release** the build for that commit is promoted from the data bucket into the Worker-fronted **serving bucket** (`tiles.openwaters.io`) at `bathymetry/<sha>/`, the Worker is deployed pointing at that release (`RELEASE_PREFIX`), and the viewer ships to GitHub Pages. Re-dispatching `release.yml` with a prior built sha republishes it with no rebuild.
+
+Two R2 buckets — `data` (public, all build state) and the serving bucket. Required
+repository secrets: `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`,
+`R2_BUCKET` (the serving bucket), and `CLOUDFLARE_API_TOKEN` (Worker deploy). The R2
+credentials need read/write on **both** buckets; the Worker's binding
+(`worker/wrangler.toml` `bucket_name`, overwritten at deploy) names the serving bucket.
 
 ## Conventions
 

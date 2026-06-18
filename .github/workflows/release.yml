@@ -1,6 +1,6 @@
 name: Release
 
-# Republishes a build that was already produced on main (build/<sha>/ in R2) — no
+# Republishes a build that was already produced on main (bathymetry/build/<sha>/ in R2) — no
 # rebuild — and deploys the Worker + viewer. The build pipeline lives in ci.yml.
 # A published release promotes the build for its tagged commit. Run manually
 # (workflow_dispatch from main, with a `sha`) to publish any other built commit
@@ -16,28 +16,31 @@ on:
         default: ""
 
 env:
-  R2_BUCKET: ${{ secrets.R2_BUCKET }}
+  TILES_BUCKET: ${{ secrets.R2_BUCKET }} # serving bucket (tiles.openwaters.io), Worker-bound
+  DATA_BUCKET: data # build bucket (data.openwaters.io); promote copies build → tiles
   AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
   AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
   AWS_DEFAULT_REGION: auto
   AWS_ENDPOINT_URL: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
 
 jobs:
-  # Promote build/<sha>/ → releases/<sha>/ (server-side copy, no rebuild). build/ is
-  # GC'd after 7 days; releases/ has NO lifecycle rule, so the live bundle is never
-  # collected out from under the Worker regardless of release cadence. Atomicity comes
-  # from deploy-worker flipping TILES_PREFIX *after* this lands in the unserved prefix —
-  # clients keep reading the old releases/<sha>/ until the new Worker version rolls out.
+  # Promote data:bathymetry/build/<sha>/ → tiles:bathymetry/<sha>/ — a cross-bucket
+  # server-side copy out of the build bucket into the Worker-fronted serving bucket (no
+  # rebuild). build/ is GC'd after 7 days; the tiles bucket has NO lifecycle rule, so the
+  # live bundle is never collected out from under the Worker regardless of release
+  # cadence. Atomicity comes from deploy-worker flipping RELEASE_PREFIX *after* this lands
+  # in the unserved <sha>/ dir — clients keep reading the old release until the new
+  # Worker version rolls out.
   publish-r2:
     runs-on: ubuntu-latest
     env:
       SHA: ${{ github.event.inputs.sha || github.sha }}
     steps:
-      - name: Promote build → releases/
+      - name: Promote build → tiles bucket
         run: |
-          echo "publishing build/$SHA → releases/$SHA"
-          if ! aws s3 ls "s3://$R2_BUCKET/build/$SHA/manifest.json" >/dev/null 2>&1; then
-            echo "::error::No build at build/$SHA/ — release/dispatch a commit that was built on main."
+          echo "publishing bathymetry/build/$SHA → tiles:bathymetry/$SHA"
+          if ! aws s3 ls "s3://$DATA_BUCKET/bathymetry/build/$SHA/manifest.json" >/dev/null 2>&1; then
+            echo "::error::No build at bathymetry/build/$SHA/ — release/dispatch a commit that was built on main."
             exit 1
           fi
           set -o pipefail
@@ -47,26 +50,26 @@ jobs:
           # manifest.json is below the multipart threshold and hits that path — round-trip it
           # through the runner, where the upload sends no tagging header. Small future overlays
           # would need the same; lower the threshold or switch to rclone if that happens.
-          aws s3 cp "s3://$R2_BUCKET/build/$SHA/" "s3://$R2_BUCKET/releases/$SHA/" \
+          aws s3 cp "s3://$DATA_BUCKET/bathymetry/build/$SHA/" "s3://$TILES_BUCKET/bathymetry/$SHA/" \
             --recursive --exclude 'contour-shards/*' --exclude 'manifest.json' --copy-props none
-          aws s3 cp "s3://$R2_BUCKET/build/$SHA/manifest.json" - \
-            | aws s3 cp - "s3://$R2_BUCKET/releases/$SHA/manifest.json" --content-type application/json
+          aws s3 cp "s3://$DATA_BUCKET/bathymetry/build/$SHA/manifest.json" - \
+            | aws s3 cp - "s3://$TILES_BUCKET/bathymetry/$SHA/manifest.json" --content-type application/json
       - name: Prune old releases (keep newest 3)
         run: |
           # Count-based retention (current + 2 rollback targets), ordered by each
-          # release's manifest.json mtime — never age/cadence dependent, so releases/
-          # needs no lifecycle rule. The copy above runs first, so $SHA is always kept.
-          keep=$(aws s3 ls "s3://$R2_BUCKET/releases/" --recursive \
+          # release's manifest.json mtime — never age/cadence dependent, so the tiles
+          # bucket needs no lifecycle rule. The copy above runs first, so $SHA is always kept.
+          keep=$(aws s3 ls "s3://$TILES_BUCKET/bathymetry/" --recursive \
             | grep '/manifest\.json$' | sort -r | awk '{print $4}' | cut -d/ -f2 | head -3)
           [ -n "$keep" ] || { echo "::error::no releases found — refusing to prune"; exit 1; }
-          for sha in $(aws s3 ls "s3://$R2_BUCKET/releases/" | awk '{print $2}' | tr -d /); do
+          for sha in $(aws s3 ls "s3://$TILES_BUCKET/bathymetry/" | awk '{print $2}' | tr -d /); do
             grep -qx "$sha" <<<"$keep" || {
-              echo "pruning releases/$sha"
-              aws s3 rm "s3://$R2_BUCKET/releases/$sha" --recursive
+              echo "pruning bathymetry/$sha"
+              aws s3 rm "s3://$TILES_BUCKET/bathymetry/$sha" --recursive
             }
           done
 
-  # Deploy the serving Worker pointed at releases/<sha>/. This deploy IS the atomic
+  # Deploy the serving Worker pointed at bathymetry/<sha>/. This deploy IS the atomic
   # cutover: Cloudflare rolls the new version globally as a unit, so no client ever
   # sees a mix of old/new bundles. Rollback = re-dispatch with a prior (kept) sha.
   deploy-worker:
@@ -83,13 +86,13 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
-          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          TILES_BUCKET: ${{ secrets.R2_BUCKET }}
         run: |
           npm ci
           # Bind the same bucket the build writes to; wrangler.toml can't read env vars,
           # so overwrite the placeholder name at deploy (keeps worker + build in sync).
-          sed -i "s|^bucket_name = .*|bucket_name = \"$R2_BUCKET\"|" wrangler.toml
-          npx wrangler deploy --var "TILES_PREFIX:releases/$SHA/"
+          sed -i "s|^bucket_name = .*|bucket_name = \"$TILES_BUCKET\"|" wrangler.toml
+          npx wrangler deploy --var "RELEASE_PREFIX:bathymetry/$SHA/"
 
   # Build the viewer (pointed at the Worker) and deploy it to GitHub Pages.
   deploy-pages:
@@ -113,3 +116,35 @@ jobs:
         with: { path: dist }
       - id: deployment
         uses: actions/deploy-pages@v5
+
+  # Probe the live endpoint after cutover — a broken route, missing bundle, or a
+  # detached bucket fails the release loudly instead of 404ing silently. The Worker is
+  # already live by here (deploy is the atomic cutover), so a failure means roll back:
+  # re-dispatch this workflow with a prior kept sha.
+  smoke-test:
+    needs: deploy-worker
+    runs-on: ubuntu-latest
+    env:
+      BASE: https://tiles.openwaters.io
+    steps:
+      - name: Probe tiles + TileJSON + R2 fall-through
+        run: |
+          set -uo pipefail
+          fail=0
+          # HEAD only (-I): exercises the route/binding without pulling tile bytes or
+          # the multi-GB GEBCO zip. No -f, so we read the real status code ourselves.
+          check() { # label want-code url [want-content-type-substr]
+            local label=$1 want=$2 url=$3 want_ct=${4:-} out code ct
+            out=$(curl -sS -I -o /dev/null -w '%{http_code} %{content_type}' "$url") || out="000 -"
+            code=${out%% *}; ct=${out#* }
+            if [ "$code" = "$want" ] && { [ -z "$want_ct" ] || [[ "$ct" == *"$want_ct"* ]]; }; then
+              echo "ok   $label → $code $ct"
+            else
+              echo "::error::$label → got '$code $ct', want '$want ${want_ct:-any}'  ($url)"
+              fail=1
+            fi
+          }
+          check "raster tile"     200 "$BASE/bathymetry/0/0/0.webp"            image/webp
+          check "vector tile"     200 "$BASE/bathymetry/0/0/0.pbf"             protobuf
+          check "raster.json"     200 "$BASE/bathymetry/raster.json"           json
+          exit $fail

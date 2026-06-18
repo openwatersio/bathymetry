@@ -1,68 +1,107 @@
-# Bathymetry Tiles
+# Open Waters: Bathymetry
 
-Bathymetry web map tiles comprised of global ([GEBCO](https://www.gebco.net/)) and
-regional high-res sources (CUDEM, EMODnet, …):
+Bathymetry as web map tiles for MapLibre / Mapbox GL, build from a mosaic of global and regional sources. Served as raster DEM tiles for depth shading and hillshade, and vector contour tiles for crisp lines and labels.
 
-- **terrain** — Terrarium-encoded raster, for depth shading (color-relief), hillshade, and 3D terrain
-- **contours** — bathymetric vector contour lines at non-uniform depth intervals
+Coverage is global through z8 (~15″) with regional detail to z14 (~0.25″) where high-res sources exist.
 
-Part of the [OpenWaters](https://github.com/openwatersio) project — modern
-open-source tools for marine navigation.
+> ### **[Preview](https://openwatersio.github.io/bathymetry/)**
 
-## Quick start
+> [!WARNING]
+> **Not for navigational use.** Do not use this bathymetry for navigation, or in any
+> situation where inaccuracies could result in harm to people or property. It is intended
+> for general-purpose web mapping and visualization.
+>
+> Depths are **not** reduced to a chart datum and do not account for tides or water
+> level — they are not charted depths. The data is interpolated and merged from sources
+> of differing age, resolution, and datum, then smoothed during tiling, so values are
+> approximate. Gridded bathymetry also omits navigational hazards (rocks, wrecks,
+> obstructions, shoals, aids to navigation) shown on official charts.
+>
+> Always consult official nautical charts for navigation.
 
-The toolchain is heavy native binaries; the `Dockerfile` is the source of truth.
-Locally you need [uv](https://docs.astral.sh/uv/), [just](https://github.com/casey/just),
-GDAL, and tippecanoe (see [CONTRIBUTING.md](CONTRIBUTING.md) for the full setup).
+## Usage
 
-```bash
-uv sync --project pipelines   # once
-just preview                  # build the NY-harbor demo (GEBCO + CUDEM) + seed the local Worker
+## TileJSON
+
+The bathymetry is available as XYZ tiles in two flavors:
+
+- **Raster** (Terrarium-encoded DEM) — [TileJSON](https://tiles.openwaters.io/bathymetry/raster.json) - depth per pixel, for depth shading (color-relief), hillshade, and 3D terrain.<br/>
+- **Vector** (MVT) - [TileJSON](https://tiles.openwaters.io/bathymetry/vector.json) — bathymetric contour lines at non-uniform depth intervals.<br\>
+
+Point any mapping library that supports XYZ tiles at these URLs. The TileJSONs include attribution and metadata, so libraries that support TileJSON will credit the sources automatically.
+
+### MapLibre
+
+Point a `raster-dem` source and a `vector` source at the two TileJSONs:
+
+```js
+import maplibregl from "maplibre-gl";
+
+const BASE = "https://tiles.openwaters.io/bathymetry";
+
+const map = new maplibregl.Map({
+  container: "map",
+  center: [-73.96, 40.55],
+  zoom: 11,
+  style: {
+    version: 8,
+    sources: {
+      "bathymetry-dem": {
+        type: "raster-dem",
+        url: `${BASE}/raster.json`,
+        encoding: "terrarium", // required — MapLibre defaults to Mapbox encoding
+        tileSize: 512,
+      },
+      bathymetry: {
+        type: "vector",
+        url: `${BASE}/vector.json`,
+      },
+    },
+    layers: [
+      {
+        id: "hillshade",
+        type: "hillshade",
+        source: "bathymetry-dem",
+        paint: { "hillshade-exaggeration": 0.6 },
+      },
+      {
+        id: "contours",
+        type: "line",
+        source: "bathymetry",
+        "source-layer": "contours",
+        paint: { "line-color": "#3b7", "line-width": 0.5, "line-opacity": 0.4 },
+      },
+    ],
+  },
+});
+
+// Optional: 3D seafloor from the same DEM
+// map.on("load", () => map.setTerrain({ source: "bathymetry-dem", exaggeration: 1 }));
 ```
 
-Then, in separate terminals, run the Worker and the viewer:
-
-```bash
-cd worker && npm install && npm run dev              # tile Worker on :8787
-VITE_TILES_BASE=http://localhost:8787 npm run dev    # viewer on :5173 (repo root)
-```
-
-Open <http://localhost:5173/#12/40.55/-73.96>. See [CONTRIBUTING.md](CONTRIBUTING.md)
-for the pipeline (`just source`/`sources`/`planet`), adding sources, and the serving
-model. Drag any `.pmtiles` into the [PMTiles Viewer](https://protomaps.github.io/PMTiles/)
-to inspect it.
-
-## In the container
-
-```bash
-docker build -t bathymetry-tiles .
-docker run --rm -v "$(pwd)/pipelines/store:/app/pipelines/store" \
-  bathymetry-tiles just planet          # or: just source <id> / just sources
-```
-
-Set `BBOX="W,S,E,N"` for a regional build. `just --list` shows all recipes.
-
-## GitHub Actions
-
-The workflow at `.github/workflows/ci.yml`:
-
-- **Every push** builds the toolchain image and runs the offline self-checks (`test-sources`, `test-engine`); the viewer builds too.
-- **Default branch / release / manual dispatch** runs the full build: prepare each source (matrix) → plan the covering and diff it against the previous run → aggregate the changed tiles (sharded across runners) → bundle planet + overlays + contours + manifest. State persists in R2 so rebuilds are incremental.
-- **On a published release** it promotes the bundles to Cloudflare R2 (`tiles.openwaters.io`), deploys the serving Worker, and ships the viewer to GitHub Pages.
-- **Manual runs** (Actions → Build → Run workflow) accept an optional `bbox` and shard count.
-
-Building/publishing requires these repository secrets: `R2_ACCOUNT_ID`,
-`R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`, and `CLOUDFLARE_API_TOKEN`
-(for the Worker deploy). The R2 token must have **Object Read & Write** on `R2_BUCKET`,
-and the Worker's binding (`worker/wrangler.toml` `bucket_name`) must name that same bucket.
+For depth **color-relief** shading, contour **labels**, and a layer-toggle UI, see the
+demo viewer in [`index.js`](index.js). Attribution is carried in each TileJSON, so
+MapLibre's attribution control credits the sources automatically.
 
 ## Data sources
 
-[GEBCO](https://www.gebco.net/) (15 arc-second global grid) is the base. Regional
-high-res sources are added under `sources/<id>/` (each with its own fetch→DEM recipe);
-priority is derived from resolution, so finer data wins in overlap. Current sources
-include NOAA CUDEM (~3–10 m, US coast) and EMODnet (~115 m, European waters). See
-[RESEARCH.md](./RESEARCH.md) and [CONTRIBUTING.md](CONTRIBUTING.md) (Adding a source).
+Sources are merged by priority derived from resolution, so finer data wins where they overlap. Each is built under [`sources/`](sources/):
+
+- **[NOAA BlueTopo](sources/bluetopo/)** — ~2–16 m, US coastal · NOAA Office of Coast Survey · public domain
+- **[NOAA CUDEM 1/9″](sources/cudem/)** — ~3 m, US coast · NOAA NCEI · public domain
+- **[NOAA CUDEM 1/3″](sources/cudem_third/)** — ~10 m, US coast · NOAA NCEI · public domain
+- **[Danmarks Dybdemodel (DDM)](sources/ddm/)** — 50 m, Danish waters · SDFI / Dataforsyningen
+- **[EMODnet Bathymetry 2024](sources/emodnet/)** — ~115 m, European waters · EMODnet Bathymetry Consortium · CC-BY 4.0
+- **[GEBCO 2026 Grid](sources/gebco/)** — 15″ (~450 m), global base · GEBCO Compilation Group / BODC · public domain
+
+See [RESEARCH.md](./RESEARCH.md) for the wider source survey and
+[CONTRIBUTING.md](CONTRIBUTING.md) for adding one.
+
+## Building & contributing
+
+The build pipeline, local development, container usage, and CI/deploy live in
+[CONTRIBUTING.md](CONTRIBUTING.md). Drag any `.pmtiles` into the
+[PMTiles Viewer](https://protomaps.github.io/PMTiles/) to inspect it.
 
 ## License
 
@@ -70,8 +109,7 @@ Code: BSD-3-Clause (see [LICENSE](LICENSE)). The `pipelines/*.py` vendored/adapt
 from [mapterhorn](https://github.com/mapterhorn/mapterhorn) also carry its BSD-3
 copyright (`pipelines/LICENSE.mapterhorn`).
 
-Output data inherits GEBCO's terms
-(public domain, attribution required):
+Output data inherits GEBCO's terms (public domain, attribution required):
 
 > _GEBCO Bathymetric Compilation Group 2026 (2026) The GEBCO_2026 Grid
 > (doi:10.5285/4f68d5c7-45eb-f999-e063-7086abc036fa)_

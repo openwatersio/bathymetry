@@ -37,8 +37,8 @@ def source_path(source, filename):
     1. The filename is already a full ``/vsi`` path (a streaming source like CUDEM,
        registered straight off a public bucket) — use it verbatim.
     2. ``SOURCE_VSI_BASE`` is set (the CI aggregate job reading prepared COGs from
-       public R2) — resolve ``<base>/<source>/<filename>``, e.g.
-       ``/vsicurl/https://tiles.openwaters.io/store/source/gebco/gebco_0.tif``.
+       the public data bucket) — resolve ``<base>/<source>/<filename>``, e.g.
+       ``/vsicurl/https://data.openwaters.io/bathymetry/source/gebco/gebco_0.tif``.
     3. Otherwise (local dev) — ``store/source/<source>/<filename>`` on disk.
 
     So locally-prepared sources stream from R2 in CI yet read from disk locally,

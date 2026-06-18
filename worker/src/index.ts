@@ -39,7 +39,7 @@ function ensureCodec(): Promise<void> {
 
 export interface Env {
   TILES: R2Bucket;
-  TILES_PREFIX?: string; // R2 key prefix, e.g. "bathymetry/"; default ""
+  RELEASE_PREFIX?: string; // R2 key prefix selecting which release to serve, e.g. "bathymetry/<sha>/"; default ""
   BASE_PATH?: string; // URL mount path = the Cloudflare route prefix; default "/bathymetry"
 }
 
@@ -75,7 +75,7 @@ class R2Source implements Source {
 // One PMTiles instance per file, reused across requests within an isolate.
 const pmCache = new Map<string, PMTiles>();
 function pm(env: Env, file: string): PMTiles {
-  const key = (env.TILES_PREFIX ?? "") + file;
+  const key = (env.RELEASE_PREFIX ?? "") + file;
   let p = pmCache.get(key);
   if (!p) {
     p = new PMTiles(new R2Source(env.TILES, key));
@@ -87,7 +87,7 @@ function pm(env: Env, file: string): PMTiles {
 let manifestCache: Manifest | undefined;
 async function manifest(env: Env): Promise<Manifest> {
   if (!manifestCache) {
-    const obj = await env.TILES.get((env.TILES_PREFIX ?? "") + "manifest.json");
+    const obj = await env.TILES.get((env.RELEASE_PREFIX ?? "") + "manifest.json");
     if (!obj) throw new Error("manifest.json missing");
     manifestCache = JSON.parse(await obj.text());
   }

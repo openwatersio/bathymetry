@@ -18,8 +18,9 @@ binding = "TILES"
 bucket_name = "tiles"
 
 [vars]
-# Key prefix within the bucket (e.g. "bathymetry/" in production); "" = root.
-TILES_PREFIX = ""
+# R2 key prefix selecting which release the Worker serves. Prod overrides this at deploy
+# with the promoted release dir (e.g. "bathymetry/<sha>/"); "" = local seed at root.
+RELEASE_PREFIX = ""
 # URL mount path; must match the route prefix above. "" would serve at root.
 BASE_PATH = "/bathymetry"
 
