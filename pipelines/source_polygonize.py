@@ -3,7 +3,7 @@
 Vendored from mapterhorn (BSD-3). Rasterizes a 1-valued mask per file,
 polygonizes it, merges all files, and dissolves to a single union polygon. The
 covering uses these footprints; a future provenance/footprint vector layer
-(PLAN.md WS5) can tile them straight.
+(ROADMAP.md Milestone 5) can tile them straight.
 
 Note: shells out via utils.run_command; inputs are our own source ids/filenames
 (filenames are sanitized upstream), not untrusted input.

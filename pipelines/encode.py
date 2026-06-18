@@ -20,7 +20,7 @@ zooms (shallow coastal detail) keep full precision. At z<=19 the rounded value
 is an exact multiple of the 1/256 LSB, so the RGB packing is lossless.
 
 Bathymetry adaptation — *conservative rounding*. A chart must bias shallow:
-charted depth <= true depth (PLAN.md). So by default we round the height
+charted depth <= true depth. So by default we round the height
 *toward shallower* (ceil, i.e. toward the surface / less-negative), guaranteeing
 the decoded elevation is never deeper than the truth. The cost is an up-to-one-
 step shallow bias, which is sub-perceptual at the zoom each step is applied

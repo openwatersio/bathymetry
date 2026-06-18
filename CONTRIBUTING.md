@@ -20,7 +20,7 @@ sources/<id>/   →  pipelines/  →  store/bundle/        →  worker/        �
 | `worker/`                                 | Cloudflare Worker (TypeScript) that serves the unified tile endpoint from R2.                                 |
 | `index.js`, `index.html`                  | Vite/MapLibre viewer (repo root).                                                                             |
 | `data/`, `pipelines/store/`, `dist/`      | Build artifacts (gitignored). All pipeline stages write under `pipelines/store/`.                              |
-| `MOSAIC-PLAN.md`, `SCALING.md`, `PLAN.md` | Design docs. The full port plan lives in the Claude plan file referenced in commits.                          |
+| `ROADMAP.md`                              | Roadmap: goal, workstreams, source/coverage, build scaling. Port plan lives in the Claude plan file referenced in commits. |
 
 ## Prerequisites
 

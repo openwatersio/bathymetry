@@ -5,7 +5,7 @@ Reads the knobs from ``metadata.json``:
   - ``negate``: flip positive-down depth sources (e.g. DDM, stored as +depth) to
     negative-down elevation.
   - ``datum_offset_m``: constant added to bring the source to ~MSL (a single
-    offset, not full VDatum — the WS3 seam for a spatially-varying separation).
+    offset, not full VDatum — the Milestone 3 seam for a spatially-varying separation).
 
 Operates per file in ``store/source/<id>/``, in the source's native CRS (the
 reprojection to Web Mercator happens later, in the aggregation stage), preserving
