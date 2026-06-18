@@ -77,9 +77,11 @@ Contour tiles are tile-keyed in `store/contour` so clean tiles persist across ru
 diffs the new covering against the previous (`get_dirty_aggregation_filenames`) and
 only changed aggregation tiles rebuild; clean tiles' pmtiles/contours are reused.
 `aggregate` shards by strided slice of the dirty list (`aggregation_run.py shard i n`).
-Heavy build runs on the default branch / release / `workflow_dispatch` (a shared
-store shouldn't be mutated from every feature branch). On release, bundles promote to
-`bathymetry/<year>/`, the Worker deploys (`wrangler`), and the viewer ships to Pages.
+Heavy build runs on `workflow_dispatch` only (a shared store shouldn't be mutated by
+routine pushes); pushes run just the light checks. Releasing a commit promotes the
+build a dispatch produced for it — so dispatch a build before you release that commit.
+On release, bundles promote to `bathymetry/<year>/`, the Worker deploys (`wrangler`),
+and the viewer ships to Pages.
 
 ## Conventions
 

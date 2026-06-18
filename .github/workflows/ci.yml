@@ -10,9 +10,9 @@ name: Build
 # clean tiles' pmtiles/contours are reused straight from the store. Final bundles
 # land in build/<sha>/; a release promotes that build (see release.yml).
 #
-# The heavy build runs on the default branch and manual dispatch only (a shared
-# incremental store shouldn't be mutated from every feature branch); any branch can
-# trigger a build via workflow_dispatch (optionally with a BBOX).
+# The heavy build runs on manual dispatch only (a shared incremental store shouldn't
+# be mutated by routine pushes); any branch can trigger one via workflow_dispatch
+# (optionally with a BBOX). Pushes run only the light checks (image/check/web).
 
 on:
   push:
@@ -45,9 +45,12 @@ env:
   AWS_RETRY_MODE: adaptive
   AWS_MAX_ATTEMPTS: "10"
 
-# Supersede in-progress runs on the same branch.
+# Supersede in-progress runs of the same kind on the same branch. event_name in the key
+# isolates push (light checks) from workflow_dispatch (the heavy planet build), so a push
+# to main can never cancel a running dispatched build. Within the dispatch lane it still
+# holds — re-dispatching cancels the prior build, so two never race the shared store.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
 jobs:
@@ -82,11 +85,11 @@ jobs:
           docker run --rm "$IMAGE:${{ github.sha }}" just test-sources
           docker run --rm "$IMAGE:${{ github.sha }}" just test-engine
 
-  # ─── Build (default branch + dispatch; NOT release — a release just republishes
-  # the build the commit already produced on main, see release.yml) ──────────────
+  # ─── Build (workflow_dispatch only; NOT release — a release just republishes a
+  # build a dispatch already produced for that commit, see release.yml) ──────────
   # Enumerate the sources (one dir per source) into a matrix.
   discover:
-    if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     outputs:
       sources: ${{ steps.l.outputs.sources }}
