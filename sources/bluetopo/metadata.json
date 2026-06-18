@@ -5,5 +5,6 @@
     "license": "public domain (U.S. Government work)",
     "max_zoom": 14,
     "band": 1,
-    "mixed_crs": true
+    "mixed_crs": true,
+    "volatile": true
 }

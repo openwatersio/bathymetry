@@ -108,19 +108,23 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/ghcr-login
-      # Skip the whole fetch when R2 already holds this source built from the same
-      # recipe (source data is stable per release; only re-prepare when the recipe
-      # under sources/<id>/ changes). The hash marker lives beside the source data.
+      # Unless a source is flagged "volatile" in metadata.json or its recipe under
+      # sources/<id>/ changed, skip the fetch and reuse R2's copy (a recipe-hash marker
+      # beside the data tracks this). Volatile sources (BlueTopo/CUDEM) read a live
+      # upstream catalog whose tile list drifts, so they re-register every build.
       - name: Already current in R2?
         id: check
         env:
           RECIPE_HASH: ${{ hashFiles(format('sources/{0}/**', matrix.source)) }}
         run: |
+          volatile=$(jq -r '.volatile // false' "sources/${{ matrix.source }}/metadata.json")
           have=$(aws s3 cp "s3://$R2_BUCKET/store/source/${{ matrix.source }}/.recipe-hash" - 2>/dev/null || true)
-          if [ -n "$RECIPE_HASH" ] && [ "$have" = "$RECIPE_HASH" ]; then current=true; else current=false; fi
+          if [ "$volatile" = "true" ]; then current=false
+          elif [ -n "$RECIPE_HASH" ] && [ "$have" = "$RECIPE_HASH" ]; then current=true
+          else current=false; fi
           echo "current=$current" >> "$GITHUB_OUTPUT"
           echo "hash=$RECIPE_HASH" >> "$GITHUB_OUTPUT"
-          echo "${{ matrix.source }}: recipe=$RECIPE_HASH r2=${have:-none} → current=$current"
+          echo "${{ matrix.source }}: recipe=$RECIPE_HASH r2=${have:-none} volatile=$volatile → current=$current"
       # GEBCO's 4 GB zip + extract needs headroom.
       - name: Free disk space
         if: steps.check.outputs.current != 'true' && matrix.source == 'gebco'
