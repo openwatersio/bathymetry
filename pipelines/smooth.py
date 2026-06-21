@@ -1,16 +1,22 @@
-"""Slope-selective DEM smoothing (ported from scripts/smooth-dem + scripts/blur).
+"""Slope- and depth-selective DEM smoothing.
 
-Blurs flat areas (abyssal plains, shelves) to cut noise-driven contour
-stairstepping while preserving steep detail (canyon walls, seamounts). Applied to
-each aggregation tile's merged DEM, so the raster encode and the contour fork
-share one smoothed surface. Processed in overlapping windows (halo = the gaussian
-truncation radius), so peak memory is one padded block, not the whole raster — a
-z14 macrotile is 32768px ≈ 4 GB/band, which a whole-array read would OOM.
+Blurs flat seafloor to cut noise-driven contour stairstepping and abyssal stipple.
+A depth gate escalates the blur with depth and never reduces the shallow baseline:
+shallow water keeps its light, measured-precision-preserving smoothing (σ=DEM_SIGMA);
+the kernel grows toward DEM_SIGMA_DEEP through the shelf; the informational deep below
+the 200 m shelf break is smoothed hard. A slope gate preserves steep detail (canyon
+walls, seamounts) at every depth. Navigation safety is bounded by under-keel
+clearance, so the shallow band (≤ DEPTH_FULL = 30 m, the ECDIS default safety
+contour) — where measured precision matters most — stays at the light baseline.
+Applied to each aggregation tile's merged DEM, so the raster encode and the contour
+fork share one smoothed surface. Processed in overlapping windows (halo = the gaussian truncation radius),
+so peak memory is one padded block, not the whole raster — a z14 macrotile is
+32768px ≈ 4 GB/band, which a whole-array read would OOM.
 
-ponytail: sigma is in merged-DEM pixels, so the physical blur scale tracks the
-tile's zoom (coarse base tiles blur more in metres, fine regional tiles less) —
-which is roughly what we want (coarse data is noisier). Revisit with a
-physical-scale sigma if it over/under-blurs. SKIP_SMOOTH=1 disables it.
+Sigma is in merged-DEM pixels, so the physical blur scale tracks the tile's zoom
+(coarse base tiles blur more in metres, fine regional tiles less) — roughly what we
+want (coarse data is noisier). Revisit with a physical-scale sigma if it
+over/under-blurs. SKIP_SMOOTH=1 disables it.
 """
 
 import glob
@@ -23,10 +29,13 @@ from scipy.ndimage import gaussian_filter
 
 NODATA = -9999
 
-DEM_SIGMA = float(os.environ.get("SMOOTH_DEM_SIGMA", "4"))
+DEM_SIGMA = float(os.environ.get("SMOOTH_DEM_SIGMA", "4"))            # shallow baseline blur (px); unchanged from original
+DEM_SIGMA_DEEP = float(os.environ.get("SMOOTH_DEM_SIGMA_DEEP", "16")) # deep blur (px); main dial — bigger = flatter deep
 MASK_SIGMA = float(os.environ.get("SMOOTH_MASK_SIGMA", "4"))
 SLOPE_LOW = float(os.environ.get("SMOOTH_SLOPE_LOW", "1"))    # ≤ this slope (deg): fully blurred
 SLOPE_HIGH = float(os.environ.get("SMOOTH_SLOPE_HIGH", "5"))  # ≥ this slope: original kept
+DEPTH_FULL = float(os.environ.get("SMOOTH_DEPTH_FULL", "30"))     # ≤ this depth (m): light baseline only (ECDIS safety contour)
+DEPTH_SMOOTH = float(os.environ.get("SMOOTH_DEPTH_SMOOTH", "200")) # ≥ this depth (m): full heavy blur (shelf break)
 BLOCK = int(os.environ.get("SMOOTH_BLOCK", "2048"))          # window side (px); caps peak memory
 TRUNCATE = 4.0                                               # gaussian_filter default kernel cutoff (σ)
 
@@ -36,13 +45,22 @@ def smooth_array(dem, res, nodata=NODATA):
     water = valid & (dem < 0)
     # Clamp land/nodata to 0 so they don't drag the blur of nearby ocean pixels.
     work = np.where(water, dem, 0.0).astype("float32")
-    blurred = gaussian_filter(work, sigma=DEM_SIGMA, mode="nearest")
+    # Two blur scales: a light one (the shallow baseline, unchanged from the original
+    # slope-gated smooth) and a heavy one ramped in with depth, so the informational
+    # deep flattens while the shallows keep their measured precision.
+    blur_light = gaussian_filter(work, sigma=DEM_SIGMA, mode="nearest")
+    blur_heavy = gaussian_filter(work, sigma=DEM_SIGMA_DEEP, mode="nearest")
     # Slope (degrees) from the clamped surface, accounting for pixel size.
     gy, gx = np.gradient(work, res)
     slope = np.degrees(np.arctan(np.hypot(gx, gy)))
     # flat weight: 1 where flat (→ blurred), 0 where steep (→ original); feathered.
     flat_w = 1.0 - np.clip((slope - SLOPE_LOW) / (SLOPE_HIGH - SLOPE_LOW), 0.0, 1.0)
     flat_w = gaussian_filter(flat_w, sigma=MASK_SIGMA, mode="nearest")
+    # depth weight: 0 in the navigable shallows (light baseline only), ramping to 1
+    # below the 200 m shelf break (full heavy blur). Never reduces shallow smoothing.
+    depth = np.where(water, -dem, 0.0)  # metres, positive down
+    depth_w = np.clip((depth - DEPTH_FULL) / (DEPTH_SMOOTH - DEPTH_FULL), 0.0, 1.0)
+    blurred = blur_light * (1.0 - depth_w) + blur_heavy * depth_w
     out = dem * (1.0 - flat_w) + blurred * flat_w
     return np.where(water, out, dem).astype("float32")  # land + nodata untouched
 
@@ -53,7 +71,7 @@ def smooth_tiff(path, block=None):
     feeds each block real neighbours, so interior output is identical to a whole-array
     smooth; only the true raster edge falls back to mode='nearest', exactly as before."""
     block = block or BLOCK
-    halo = int(np.ceil(TRUNCATE * max(DEM_SIGMA, MASK_SIGMA))) + 1
+    halo = int(np.ceil(TRUNCATE * max(DEM_SIGMA, DEM_SIGMA_DEEP, MASK_SIGMA))) + 1
     with rasterio.open(path) as src:
         profile = src.profile
         res = src.res[0]
@@ -84,11 +102,15 @@ def smooth_merged(tmp_folder):
 
 
 def _check():
-    """Flat noisy abyssal plain smooths; a steep step is preserved."""
+    """Deep flat smooths harder than shallow; shallow stays denoised; a steep step is preserved."""
     rng = np.random.default_rng(0)
-    flat = -4000 + rng.normal(0, 5, (256, 256)).astype("float32")  # noisy flat
-    out = smooth_array(flat, res=300.0)
-    assert out.std() < flat.std(), (out.std(), flat.std())  # noise reduced
+    noise = rng.normal(0, 5, (256, 256)).astype("float32")
+    shallow_in = (-10 + noise).astype("float32")    # ≤30 m → light baseline blur
+    deep_in = (-4000 + noise).astype("float32")     # >200 m → heavy blur
+    s_out = smooth_array(shallow_in, res=300.0)
+    d_out = smooth_array(deep_in, res=300.0)
+    assert s_out.std() < shallow_in.std(), (s_out.std(), shallow_in.std())  # shallow still denoised, not turned off
+    assert d_out.std() < s_out.std(), (d_out.std(), s_out.std())            # deep smoothed harder than shallow
 
     step = np.where(np.arange(256)[None, :] < 128, -10.0, -2000.0).astype("float32")
     step = np.broadcast_to(step, (256, 256)).copy()

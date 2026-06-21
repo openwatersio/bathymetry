@@ -19,6 +19,7 @@ it hid GEBCO above z9 — not worth losing GEBCO at high zoom. Smoothing is the
 real seam mitigation.)
 """
 
+import json
 import os
 import subprocess
 import sys
@@ -126,16 +127,29 @@ def generate(filepath):
 
 # ── bundle ───────────────────────────────────────────────────────────────────
 
-# Per-zoom depth filter (ported from scripts/contour): deep contours only at low
-# zoom, everything at z>=9.
-PER_ZOOM_FILTER = (
-    '{"*":["any",'
-    '["all",["<=","$zoom",4],["<=","depth_m",-1000]],'
-    '["all",["<=","$zoom",6],["<=","depth_m",-100]],'
-    '["all",["<=","$zoom",7],["<=","depth_m",-50]],'
-    '["all",["<=","$zoom",8],["<=","depth_m",-25]],'
-    '[">=","$zoom",9]]}'
-)
+# Scale-dependent contour interval: coarse isobaths zoomed out, finer zoomed in
+# (charts thin the deep, not the shelf — abyssal contours stipple into noise at
+# small scale). (zoom_ceiling, depths_m shown below it); at/above the last ceiling
+# every level shows. Mirrors the viewer's CONTOUR_TIERS in index.js.
+CONTOUR_TIERS = [
+    (5, [-200, -1000, -2000, -4000]),
+    (7, [-200, -500, -1000, -2000, -3000, -4000, -5000, -6000, -8000, -10000]),
+    (9, [-50, -100, -150, -200, -500, -1000, -1500, -2000, -3000, -4000, -5000, -6000, -8000, -10000]),
+    (11, [-10, -20, -30, -40, -50, -75, -100, -150, -200, -500, -1000, -1500, -2000, -3000, -4000, -5000, -6000, -8000, -10000]),
+]
+
+
+def _per_zoom_filter():
+    """Build tippecanoe's -j filter (exclusive $zoom bands) from CONTOUR_TIERS."""
+    bands, lo = [], 0
+    for hi, depths in CONTOUR_TIERS:
+        bands.append(["all", [">=", "$zoom", lo], ["<", "$zoom", hi], ["in", "depth_m", *depths]])
+        lo = hi
+    bands.append(["all", [">=", "$zoom", lo]])  # native+ zoom: every level
+    return json.dumps({"*": ["any", *bands]})
+
+
+PER_ZOOM_FILTER = _per_zoom_filter()
 
 
 def _tippecanoe(fgbs, minz, maxz, out):
@@ -143,6 +157,7 @@ def _tippecanoe(fgbs, minz, maxz, out):
         ["tippecanoe", "-o", out, "-f", "-l", "contours",
          "-n", "Bathymetric contours", "-A", utils.ATTRIBUTION,
          "-Z", str(minz), "-z", str(maxz), "-P", "-q", "--drop-densest-as-needed",
+         "--simplification", "4",  # geometric vertex thinning at low zoom (full detail at maxz)
          "-y", "depth_m", "-y", "depth_abs_m", "-j", PER_ZOOM_FILTER, *fgbs],
         check=True)
 

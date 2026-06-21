@@ -112,8 +112,8 @@ const style = {
       source: "terrain-dem",
       layout: { visibility: "none" },
       paint: {
-        "hillshade-exaggeration": 0.6,
-        "hillshade-shadow-color": "#000022",
+        "hillshade-exaggeration": 0.5,
+        "hillshade-shadow-color": "#9adcfe",
         "hillshade-highlight-color": "#ffffff",
         "hillshade-illumination-direction": 315,
       },
