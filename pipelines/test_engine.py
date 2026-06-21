@@ -88,7 +88,7 @@ def main():
         run(tmp, "downsampling.py", "run", "shard", "0", "2")
         run(tmp, "downsampling.py", "run", "shard", "1", "2")
         run(tmp, "downsampling.py", "run", "tail")
-        run(tmp, "bundle.py", "1")
+        run(tmp, "bundle.py")
 
         # shard-keys (the CI per-shard pull filter) must select every deep tile (extent
         # z >= SHARD_ROOT_Z) for exactly one shard and nothing below — a miss would pull
@@ -108,6 +108,25 @@ def main():
         assert union == deep, f"shard-keys miscovers deep tiles; missing {deep - union}, extra {union - deep}"
         assert not (selected[0] & selected[1]), f"shards must be disjoint: {selected[0] & selected[1]}"
         print(f"shard-keys ok — {len(deep)} deep pmtiles partitioned across 2 shards, none below z{shard_root_z}")
+
+        # bundle group-keys (the CI per-group pull filter) must partition EVERY terrain
+        # pmtiles across the groups: a tile in no group is missing from the bundles (a
+        # hole the Worker overzooms GEBCO into); a tile in two is double-bundled.
+        cli_env = {**os.environ, "SOURCES_DIR": "sources", "PYTHONPATH": PIPE,
+                   "MACROTILE_Z": "10", "NUM_OVERVIEWS": "2", "SKIP_CONTOURS": "1", "SKIP_SMOOTH": "1"}
+        names = json.loads(subprocess.run(
+            [sys.executable, os.path.join(PIPE, "bundle.py"), "groups"],
+            cwd=tmp, env=cli_env, check=True, capture_output=True, text=True).stdout.splitlines()[-1])
+        assert set(names) == {"planet", "fine"}, f"unexpected groups: {names}"
+        gsel = []
+        for name in names:
+            run(tmp, "bundle.py", "group-keys", name)
+            with open(f"{tmp}/store/keys.txt") as f:
+                gsel.append({os.path.basename(l.strip()) for l in f if l.strip()})
+        gunion = set().union(*gsel)
+        assert gunion == set(pmtiles), f"group-keys miscovers; missing {set(pmtiles) - gunion}, extra {gunion - set(pmtiles)}"
+        assert not (gsel[0] & gsel[1]), f"groups overlap: {gsel[0] & gsel[1]}"
+        print(f"group-keys ok — {len(pmtiles)} pmtiles partitioned across {len(names)} group(s)")
 
         # covering wrote the cap into child_z: the deepest aggregation tile is z9, not z11.
         agg_dir = f"{tmp}/store/aggregation"

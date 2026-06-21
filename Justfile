@@ -48,7 +48,7 @@ combine:
 #   plan job   -> just downsample-matrix N (the shard matrix, sized to the dirt)
 #   matrix job -> just downsample-shard-keys i n  (pick this shard's pmtiles to pull)
 #   matrix job -> just downsample-shard i n
-#   bundle job -> just downsample-tail-bundle
+#   plan  job  -> just downsample-tail + bundle-groups   (coarse tail, then the matrix)
 downsample-cover:
     uv run python downsampling.py cover
 downsample-matrix max:
@@ -59,9 +59,23 @@ downsample-shard-keys i n:
     uv run python downsampling.py shard-keys {{i}} {{n}}
 downsample-shard i n:
     uv run python downsampling.py run shard {{i}} {{n}}
-downsample-tail-bundle:
+downsample-tail:
     uv run python downsampling.py run tail
-    uv run python bundle.py
+
+# CI terrain bundle fan-out (one matrix job per group keeps each runner's disk bounded by
+# ONE group's tiles + output, not the whole store; mirrors the downsample/contour shards):
+#   plan job   -> just downsample-tail + bundle-groups   (tail, verify, emit group matrix)
+#   matrix job -> just bundle-group-keys <name>          (pick this group's pmtiles to pull)
+#   matrix job -> just bundle-group <name>               (bundle one group + its fragment)
+#   merge job  -> just bundle-merge                      (fragments -> manifest.json)
+bundle-groups:
+    @uv run python bundle.py groups
+bundle-group-keys name:
+    uv run python bundle.py group-keys {{name}}
+bundle-group name:
+    uv run python bundle.py group {{name}}
+bundle-merge:
+    uv run python bundle.py merge
 
 # Contours, whole set (local/regional). CI shards these across runners — see below.
 contours:

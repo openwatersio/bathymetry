@@ -295,14 +295,58 @@ jobs:
           aws s3 sync store/pmtiles "s3://$DATA_BUCKET/bathymetry/pmtiles"
           aws s3 sync store/aggregation "s3://$DATA_BUCKET/bathymetry/aggregation"
 
-  # Single-runner terrain finish: coarse pyramid tail → planet + per-source overlays +
-  # manifest. Contours are built separately (sharded, below). Runs even on a clean
-  # rebuild.
-  bundle:
+  # Terrain bundle, fanned out so each runner holds only ONE group's tiles + output — not
+  # the whole store plus every overlay at once, which overran the disk (the pmtiles writer
+  # spools each tile then copies it into the archive, so finalize ~2x's a bundle). bundle-plan
+  # finishes the coarse pyramid tail (it spans ancestors, so it can't be a deep shard) and
+  # verifies the pyramid is whole, then emits one matrix job per group; bundle-merge stitches
+  # the per-group manifest fragments. Contours are built separately (sharded, below).
+  bundle-plan:
     needs: downsample
     if: ${{ !cancelled() && needs.downsample.result == 'success' }}
     runs-on: ubuntu-latest
     permissions: { contents: read, packages: read }
+    outputs:
+      groups: ${{ steps.g.outputs.groups }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/ghcr-login
+      - name: Pull store from R2
+        run: |
+          # The tail is finished here on one runner from the full store; the matrix jobs
+          # below each pull only their group. Contours are bundled by the separate sharded
+          # jobs, so store/contour is NOT pulled here.
+          mkdir -p store/aggregation store/pmtiles
+          aws s3 sync --no-progress "s3://$DATA_BUCKET/bathymetry/aggregation" store/aggregation
+          aws s3 sync "s3://$DATA_BUCKET/bathymetry/pmtiles" store/pmtiles
+      - name: Coarse tail + group matrix
+        id: g
+        run: |
+          docker run --rm -v "$PWD/store:/app/pipelines/store" "$IMAGE:${{ github.sha }}" just downsample-tail
+          # bundle-groups verifies the pyramid is whole (fails here, before any overlay
+          # ships) then prints the group names as a JSON matrix.
+          GROUPS=$(docker run --rm -v "$PWD/store:/app/pipelines/store" "$IMAGE:${{ github.sha }}" just bundle-groups | tail -n1)
+          echo "groups=$GROUPS" >> "$GITHUB_OUTPUT"
+          echo "bundle groups: $GROUPS"
+      - name: Push tail tiles + done-markers to R2
+        run: |
+          # Tail overview tiles + downsampling done-markers feed the next incremental run,
+          # and the matrix jobs' R2 listing must include the tail tiles.
+          aws s3 sync store/pmtiles "s3://$DATA_BUCKET/bathymetry/pmtiles"
+          aws s3 sync store/aggregation "s3://$DATA_BUCKET/bathymetry/aggregation"
+
+  # One runner per group: pull only this group's pmtiles slice, bundle it, push the overlay
+  # + its manifest fragment. Peak disk = one group's tiles + ~2x its output, so it scales
+  # with the biggest single overlay, not the whole planet.
+  bundle:
+    needs: bundle-plan
+    if: ${{ !cancelled() && needs.bundle-plan.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions: { contents: read, packages: read }
+    strategy:
+      fail-fast: false
+      matrix:
+        group: ${{ fromJSON(needs.bundle-plan.outputs.groups) }}
     steps:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/ghcr-login
@@ -315,28 +359,40 @@ jobs:
           haskell: true
           large-packages: true
           swap-storage: true
-      - name: Pull store from R2
+      - name: Pull this group's tiles from R2
         run: |
-          # bundle.py concatenates EVERY tile into planet + per-source overlays, so the
-          # whole pmtiles store (tens of GB) lands here. It runs alone (after every
-          # downsample shard), so no concurrent writer races the pull. Disk headroom comes
-          # from the Free disk space step above.
-          mkdir -p store/aggregation store/pmtiles
-          # tail = the coarse pyramid levels (deep levels already built by the
-          # sharded downsample job) + bundle.py (terrain only); contours are bundled
-          # by the separate sharded contour jobs, so store/contour is NOT pulled here.
+          mkdir -p store/aggregation store/pmtiles store/bundle
+          # Coverings (small) — group-keys derives which pmtiles belong to this group, the
+          # same way bundle assigns local files, so we pull only this group's slice.
           aws s3 sync --no-progress "s3://$DATA_BUCKET/bathymetry/aggregation" store/aggregation
-          aws s3 sync "s3://$DATA_BUCKET/bathymetry/pmtiles" store/pmtiles
-      - name: Downsample tail + bundle
-        run: docker run --rm -v "$PWD/store:/app/pipelines/store" "$IMAGE:${{ github.sha }}" just downsample-tail-bundle
-      - name: Push pyramid + bundles to R2
+          aws s3 ls "s3://$DATA_BUCKET/bathymetry/pmtiles/" --recursive | awk '{print $4}' > store/pmtiles-keys.txt
+          docker run --rm -v "$PWD/store:/app/pipelines/store" \
+            "$IMAGE:${{ github.sha }}" just bundle-group-keys ${{ matrix.group }}
+          echo "pulling $(wc -l < store/keys.txt) of $(wc -l < store/pmtiles-keys.txt) pmtiles for ${{ matrix.group }}"
+          xargs -P 8 -I{} sh -c 'k="$1"; d="store/${k#bathymetry/}"; mkdir -p "$(dirname "$d")"; aws s3 cp "s3://$DATA_BUCKET/$k" "$d" --quiet' _ {} < store/keys.txt
+      - name: Bundle ${{ matrix.group }}
+        run: docker run --rm -v "$PWD/store:/app/pipelines/store" "$IMAGE:${{ github.sha }}" just bundle-group ${{ matrix.group }}
+      - name: Push ${{ matrix.group }} overlay + fragment to R2
         run: |
-          # Tail overview tiles + downsampling done-markers feed the next incremental run.
-          aws s3 sync store/pmtiles "s3://$DATA_BUCKET/bathymetry/pmtiles"
-          aws s3 sync store/aggregation "s3://$DATA_BUCKET/bathymetry/aggregation"
-          # Final artifacts keyed by commit; release promotes them in place.
-          aws s3 cp store/bundle "s3://$DATA_BUCKET/bathymetry/build/${{ github.sha }}/" \
-            --recursive --exclude '*' --include '*.pmtiles' --content-type application/octet-stream
+          B="s3://$DATA_BUCKET/bathymetry/build/${{ github.sha }}"
+          aws s3 cp "store/bundle/${{ matrix.group }}.pmtiles" "$B/${{ matrix.group }}.pmtiles" --content-type application/octet-stream
+          aws s3 cp "store/bundle/${{ matrix.group }}.json" "$B/bundle-frags/${{ matrix.group }}.json" --content-type application/json
+
+  # Stitch the per-group manifest fragments into manifest.json (copied last, so its
+  # presence marks a complete build for release.yml). A failed overlay leaves no manifest.
+  bundle-merge:
+    needs: bundle
+    if: ${{ !cancelled() && needs.bundle.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions: { contents: read, packages: read }
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/ghcr-login
+      - name: Merge manifest from fragments
+        run: |
+          mkdir -p store/bundle
+          aws s3 sync "s3://$DATA_BUCKET/bathymetry/build/${{ github.sha }}/bundle-frags" store/bundle
+          docker run --rm -v "$PWD/store:/app/pipelines/store" "$IMAGE:${{ github.sha }}" just bundle-merge
           aws s3 cp store/bundle/manifest.json "s3://$DATA_BUCKET/bathymetry/build/${{ github.sha }}/manifest.json" \
             --content-type application/json
 

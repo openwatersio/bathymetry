@@ -16,8 +16,8 @@ Usage (from pipelines/):  bundle.py
 import json
 import math
 import os
+import sys
 from glob import glob
-from multiprocessing import Pool
 
 import mercantile
 from pmtiles.tile import zxy_to_tileid, TileType, Compression
@@ -174,28 +174,110 @@ def verify_complete(aggregation_id):
             f"{', '.join(missing[:15])}{' …' if len(missing) > 15 else ''}")
 
 
-def main():
-    aggregation_id = utils.get_aggregation_ids()[-1]
-    verify_complete(aggregation_id)
-    groups, _ = group_filepaths(aggregation_id)
+def _fragment(name, meta):
+    """{kind, [id], ...meta} — one per-group manifest fragment so a matrix bundle job's
+    metadata survives to the merge step (kind marks the planet base vs an overlay)."""
+    kind = "planet" if name == "planet" else "source"
+    return {"kind": kind, **({"id": name} if kind == "source" else {}), **meta}
+
+
+def _manifest_from_fragments(frags):
     manifest = {"planet": None, "sources": []}
-    # Each group writes its own <name>.pmtiles independently → bundle them in parallel
-    # (one process per group, capped at core count). The planet group is the bulk, so
-    # the overlays now overlap it instead of queueing behind it.
-    with Pool(min(os.cpu_count() or 1, len(groups))) as pool:
-        results = pool.map(bundle_group, list(groups.items()))
-    for name, meta in results:
-        if name == "planet":
-            manifest["planet"] = meta
+    for frag in frags:
+        frag = dict(frag)
+        if frag.pop("kind") == "planet":
+            manifest["planet"] = frag
         else:
-            manifest["sources"].append({"id": name, **meta})
+            manifest["sources"].append(frag)
     # deepest first so the Worker picks the highest-res overlay where they overlap.
     manifest["sources"].sort(key=lambda s: -s["max_zoom"])
     manifest["attribution"] = attribution()
+    return manifest
+
+
+def groups_matrix():
+    """Verify the pyramid is whole, then print the group names as a JSON matrix (the CI
+    spins one bundle job per group). Runs on the tail/plan runner, which holds the full
+    store after the coarse tail; a hole here fails the build before any overlay ships."""
+    aggregation_id = utils.get_aggregation_ids()[-1]
+    verify_complete(aggregation_id)
+    groups, _ = group_filepaths(aggregation_id)
+    print(json.dumps(sorted(groups)))
+
+
+def group_keys(name):
+    """Write store/keys.txt: the R2 pmtiles keys belonging to one group, derived from the
+    R2 listing (store/pmtiles-keys.txt) by the same rule group_filepaths uses on local
+    files — so a matrix job pulls ONLY its group's slice, never the whole store."""
+    aggregation_id = utils.get_aggregation_ids()[-1]
+    sources = high_res_sources(aggregation_id)
+    out = []
+    with open("store/pmtiles-keys.txt") as f:
+        for key in f:
+            key = key.strip()
+            if not key.endswith(".pmtiles"):
+                continue
+            try:
+                z, x, y, child_z = (int(a) for a in key.split("/")[-1].replace(".pmtiles", "").split("-"))
+            except ValueError:
+                continue
+            g = "planet" if child_z <= PLANET_MAX_ZOOM else (assign_source(z, x, y, sources) or "planet")
+            if g == name:
+                out.append(key)
+    with open("store/keys.txt", "w") as f:
+        f.write("".join(k + "\n" for k in out))
+    print(f"group {name}: {len(out)} pmtiles selected")
+
+
+def group(name):
+    """Bundle one group from the tiles pulled locally (its slice only) + write its
+    fragment. Disk stays bounded by one group's tiles + output, not the whole planet."""
+    filepaths = sorted(glob("store/pmtiles/*.pmtiles") + glob("store/pmtiles/*/*.pmtiles"))
+    _, meta = bundle_group((name, filepaths))
+    utils.create_folder("store/bundle")
+    with open(f"store/bundle/{name}.json", "w") as f:
+        json.dump(_fragment(name, meta), f)
+
+
+def merge():
+    """Assemble manifest.json from the per-group fragments the matrix jobs produced."""
+    frags = [json.load(open(jf)) for jf in sorted(glob("store/bundle/*.json"))]
+    manifest = _manifest_from_fragments(frags)
+    utils.create_folder("store/bundle")
+    with open("store/bundle/manifest.json", "w") as f:
+        json.dump(manifest, f, indent=2)
+    print(f"merged manifest: planet + {len(manifest['sources'])} overlay(s)")
+
+
+def main():
+    """Local / single-runner: bundle every group sequentially, biggest first. The pmtiles
+    writer spools each tile to a temp file then copies it into the archive (finalize ~2x's
+    a bundle on disk), so building all groups at once piled every temp+final onto one disk
+    and blew it at planet scale — CI fans this out per group (groups/group/merge) instead."""
+    aggregation_id = utils.get_aggregation_ids()[-1]
+    verify_complete(aggregation_id)
+    groups, _ = group_filepaths(aggregation_id)
+    frags = []
+    for name, filepaths in sorted(groups.items(), key=lambda kv: -len(kv[1])):
+        _, meta = bundle_group((name, filepaths))
+        frags.append(_fragment(name, meta))
+    manifest = _manifest_from_fragments(frags)
     with open("store/bundle/manifest.json", "w") as f:
         json.dump(manifest, f, indent=2)
     print(f"created {len(groups)} bundle(s): {', '.join(groups)} + manifest.json")
 
 
 if __name__ == "__main__":
-    main()
+    a = sys.argv[1:]
+    if not a:
+        main()
+    elif a[:1] == ["groups"]:
+        groups_matrix()
+    elif a[:1] == ["group-keys"] and len(a) == 2:
+        group_keys(a[1])
+    elif a[:1] == ["group"] and len(a) == 2:
+        group(a[1])
+    elif a[:1] == ["merge"]:
+        merge()
+    else:
+        sys.exit("usage: bundle.py [groups | group-keys <name> | group <name> | merge]")

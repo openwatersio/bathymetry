@@ -56,7 +56,7 @@ jobs:
           # through the runner, where the upload sends no tagging header. Small future overlays
           # would need the same; lower the threshold or switch to rclone if that happens.
           aws s3 cp "s3://$DATA_BUCKET/bathymetry/build/$SHA/" "s3://$TILES_BUCKET/bathymetry/$SHA/" \
-            --recursive --exclude 'contour-shards/*' --exclude 'manifest.json' --copy-props none
+            --recursive --exclude 'contour-shards/*' --exclude 'bundle-frags/*' --exclude 'manifest.json' --copy-props none
           aws s3 cp "s3://$DATA_BUCKET/bathymetry/build/$SHA/manifest.json" - \
             | aws s3 cp - "s3://$TILES_BUCKET/bathymetry/$SHA/manifest.json" --content-type application/json
       - name: Prune old releases (keep newest 3)
