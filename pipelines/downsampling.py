@@ -22,7 +22,7 @@ import shutil
 import sys
 import time
 from glob import glob
-from multiprocessing import Pool
+from multiprocessing import get_context
 
 import imagecodecs
 import mercantile
@@ -280,7 +280,12 @@ def execute(filepaths):
     done = 0
     last = time.monotonic()
     missing = set()
-    with Pool() as pool:
+    # SPAWN, not fork: downsampling imports rasterio (utils), which inits GDAL at module
+    # load — GDAL is not fork-safe, so forked workers carry a broken copy that segfaults at
+    # teardown (no Python traceback, just exit 1 after the work prints). The deep shards on
+    # small runners happened to survive it; the tail on the full-store runner forks Pool()=
+    # all-cores and reliably crashed. Spawned workers re-import GDAL fresh, so teardown is clean.
+    with get_context("spawn").Pool() as pool:
         for child_zoom in sorted(by_child_zoom, reverse=True):
             level = by_child_zoom[child_zoom]
             print(f"child_zoom={child_zoom}: {len(level)} parent(s)", flush=True)
