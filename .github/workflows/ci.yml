@@ -329,10 +329,24 @@ jobs:
       - name: Coarse tail + group matrix
         id: g
         run: |
-          docker run --rm -e FORCE_REBUILD -v "$PWD/store:/app/pipelines/store" "$IMAGE:${{ github.sha }}" just downsample-tail
+          # DIAGNOSTIC: the tail dies at process teardown with no Python traceback, so
+          # capture the real exit code (128+signal ⇒ OOM/segv), faulthandler (C-level
+          # crash), and dmesg. Remove once the cause is fixed.
+          set +e
+          docker run --rm -e FORCE_REBUILD -e PYTHONFAULTHANDLER=1 -e PYTHONUNBUFFERED=1 \
+            -v "$PWD/store:/app/pipelines/store" "$IMAGE:${{ github.sha }}" just downsample-tail
+          rc=$?
+          echo "::warning::downsample-tail exit code = $rc"
+          if [ "$rc" != 0 ]; then
+            echo "=== free -h ==="; free -h || true
+            echo "=== df -h / ==="; df -h / || true
+            echo "=== dmesg (last 60 — OOM-killer / segfault?) ==="; sudo dmesg 2>/dev/null | tail -60 || true
+            exit "$rc"
+          fi
+          set -e
           # bundle-groups verifies the pyramid is whole (fails here, before any overlay
           # ships) then prints the group names as a JSON matrix.
-          GROUPS=$(docker run --rm -v "$PWD/store:/app/pipelines/store" "$IMAGE:${{ github.sha }}" just bundle-groups | tail -n1)
+          GROUPS=$(docker run --rm -e FORCE_REBUILD -v "$PWD/store:/app/pipelines/store" "$IMAGE:${{ github.sha }}" just bundle-groups | tail -n1)
           echo "groups=$GROUPS" >> "$GITHUB_OUTPUT"
           echo "bundle groups: $GROUPS"
       - name: Push tail tiles + done-markers to R2
