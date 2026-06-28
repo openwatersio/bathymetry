@@ -1,0 +1,7 @@
+# AusBathyTopo (Australia) 2024 — national 250 m bathy/topo compilation, full AU EEZ.
+# One Float32 COG in a ~2.8 GB zip (..._MSL_cog.tif), EPSG:4326, NoData -32767, MSL.
+# Values are elevation (seafloor negative) → no negate. ~250 m → z9 (one above GEBCO);
+# gbr30 (z12) wins the GBR/Coral Sea overlap, AusBathyTopo fills the rest of AU waters.
+# (The per-survey 2-10 m AusSeabed COGs are a separate, deferred custom-fetch job — they're
+# served via the portal/WCS + a coverage DB, not a clean static urllist like CUDEM.)
+https://files.ausseabed.gov.au/survey/AusBathyTopo%20(Australia)%202024%20250m.zip

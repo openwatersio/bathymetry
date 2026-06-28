@@ -209,7 +209,7 @@ Roughly in coverage-per-effort order:
 1. **[Vaklodingen 20m](https://downloads.rijkswaterstaatdata.nl/bodemhoogte_20mtr/bodemhoogte_20mtr.tif)** (Netherlands) — 20 m, **CC0**, a single ~97 MB GeoTIFF (EPSG:28992). Cleanest ingest in the catalog. z12. ✅ built (`sources/vaklodingen`).
 2. **[gbr30](https://files.ausseabed.gov.au/survey/Great%20Barrier%20Reef%20Bathymetry%202020%2030m.zip)** (Australia) — 30 m, CC-BY 4.0, one range-readable 3.8 GB zip of 4 COG tiles over the Great Barrier Reef + Coral Sea. z12. ✅ built (`sources/gbr30`).
 3. **[CHS NONNA-10/100](https://data.chs-shc.ca/)** (Canada) — 10 m / 100 m, **Chart Datum** (exactly the low-water datum the chart wants), OGL-Canada. Covers Canadian coasts + the Canadian Great Lakes half + the Canadian Arctic. Access B (no public COG bucket). z13 / z11.
-4. **AusSeabed survey COGs** (Australia) — 2–10 m, CC-BY 4.0, on a **public S3 bucket** (`ausseabed-public-warehouse-bathymetry`, ap-southeast-2) → pure access-A streaming like CUDEM. Patchy per-survey footprints (needs a coverage-polygon index). z12–13.
+4. **[AusBathyTopo 250m](https://www.ausseabed.gov.au/data/bathymetry)** (Australia) — national 250 m bathy/topo compilation, CC-BY 4.0, MSL, EPSG:4326. One ~2.8 GB COG zip; fills the AU EEZ at z9 (gbr30 wins the GBR/Coral Sea overlap). ✅ built (`sources/ausbathytopo`). *The per-survey 2–10 m AusSeabed COGs — the z12–13 prize — are **deferred**: served via portal/WCS + a survey coverage DB, not a clean static urllist, so they need a custom coverage-DB fetch.*
 5. **[INFOMAR](https://www.infomar.ie/)** (Ireland) — **10 m inshore** (`sources/infomar_10m`, z13) + **25 m shelf** (`sources/infomar_25m`, z11), **LAT**, CC-BY 4.0. Two **sibling sources** (cudem/cudem_third pattern). Both set `priority: 1` to outrank EMODnet regardless of any zoom tie (decoupling precedence from zoom, like S-102 vs CUDEM); `max_zoom` stays the honest native (z13 / z11) and the 10 m wins inshore via finer maxzoom within the tier. WGS84/LAT, no embedded CRS → assign EPSG:4326. 100 m offshore omitted (≈EMODnet). ✅ built.
 6. **UK [SurfZone 2m](https://environment.data.gov.uk/dataset/77e6f743-d708-4909-a80f-9510b7dbaa16) + [CCO swath](https://maps.coastalmonitoring.org/cco/)** (England) — 1–2 m, OGL v3, EPSG:27700, **ODN datum** (topographic, not chart). No static tile URLs — download is the interactive DefraDataDownload tool or a WCS endpoint, and coverage is the narrow intertidal strip. Belongs with the **awkward-fetch sources** (mirror-to-R2 / WCS), not a clean file_list — deferred to P4. z13–14.
 7. **[BATNAS](https://tanahair.indonesia.go.id/demnas/)** (Indonesia) — 6″ (~180 m), open w/ attribution (no resale), covers the whole archipelago. Login-gated fetch → R2. z10.
@@ -235,8 +235,8 @@ EMODnet already covers European seas **including the N. African Med shelf** (the
 | Source | Res | Coverage | Datum | License | Cap | Verdict (access) |
 | ------ | --- | -------- | ----- | ------- | --- | ---------------- |
 | gbr30 | 30 m | GBR + Coral Sea + QLD coast | MSL | CC-BY 4.0 ✓ | z12 | **BUILD** (B/A; one range-readable file) |
-| AusSeabed survey COGs | 2–10 m | AU EEZ survey footprints (patchy) | MSL | CC-BY 4.0 ✓ | z12–13 | **BUILD** (A; public S3, needs coverage index) |
-| AusBathyTopo 250m 2024 | 250 m | Australia EEZ | MSL | CC-BY 4.0 ✓ | z9 | OPPORTUNISTIC (B) — national fill, barely beats GEBCO |
+| AusBathyTopo 250m 2024 | 250 m | Australia EEZ | MSL | CC-BY 4.0 ✓ | z9 | **BUILT** (B; national fill, one step above GEBCO; gbr30 wins the GBR overlap) |
+| AusSeabed survey COGs | 2–10 m | AU EEZ survey footprints (patchy) | MSL | CC-BY 4.0 ✓ | z12–13 | DEFER — served via portal/WCS + a coverage DB, not a clean COG bucket; needs a custom enumeration |
 | gbr100 | 100 m | GBR + deeper Coral Sea | MSL | CC-BY 2.5-AU ✓ | z11 | OPPORTUNISTIC (B) — only the deep strip gbr30 misses |
 | NIWA NZ 250m | 250 m | NZ EEZ | — | **CC BY-NC-SA ✗** | — | SKIP — non-commercial; NZ stays GEBCO-only |
 | LINZ hydro | vector/grid | NZ | Approx LAT | **S-63 encrypted / email ✗** | — | SKIP — not obtainable as an open grid |
@@ -310,11 +310,12 @@ labeled cosmetic low-zoom fill.
 
 - **Datum is the recurring wrinkle.** Already low-water (ideal, plug into Milestone 3
   cleanly): NONNA, INFOMAR, UKHO-EEZ, Kartverket, BSH, SHOM, NOS-Estuarine (MLLW).
-  Need an offset: everything MSL/NAP/ODN/elevation (AusSeabed, gbr30, Vaklodingen, the
-  lakes). eHydro mixes MLLW vs LWRP **per district** — its single biggest ingest risk.
-- **Two clean access-A (no-download) streams** beyond CUDEM/S-102: AusSeabed's public S3
-  COGs and Great Salt Lake's GeoTIFF. Everything else is access-B (download → R2), the
-  EMODnet/DDM path. Restricted national HOs are access-C and excluded.
+  Need an offset: everything MSL/NAP/ODN/elevation (AusBathyTopo, gbr30, swIOBC, Vaklodingen,
+  the lakes). eHydro mixes MLLW vs LWRP **per district** — its single biggest ingest risk.
+- **Access-A (no-download) streams beyond CUDEM/S-102:** Great Salt Lake's single GeoTIFF.
+  (AusSeabed's per-survey COGs were expected to be one, but they're served via portal/WCS +
+  a coverage DB, not a clean public bucket — deferred.) Everything else is access-B
+  (download → R2), the EMODnet/DDM path. Restricted national HOs are access-C and excluded.
 - **License is the real filter, not data existence.** Whole regions surveyed their
   waters but lock the result: NZ (NIWA non-commercial), most of Asia, Brazil (LEPLAC
   "study only"), much of the Mediterranean and the Arabian Gulf. For those coasts GEBCO
@@ -349,7 +350,8 @@ Reuse map — which recipe each clones, and the params that change:
 | INFOMAR ✅ | `emodnet` | EPSG:4326 (assign) | — (LAT) | 13 | 10 m inshore zip (no embedded CRS) |
 | INFOMAR 25m ✅ | `emodnet` | EPSG:4326 (assign) | — (LAT) | 11 | 25 m shelf zip; sibling source; `priority:1` (both) to beat EMODnet |
 | UK SurfZone | _(deferred → P4)_ | EPSG:27700 | — (ODN) | 13 | WCS/interactive only — no static tile URLs |
-| AusSeabed | `cudem` | `mixed_crs` | — (per-survey) | 12 | enumerate L3 S3 COG urllist |
+| AusBathyTopo ✅ | `emodnet` | EPSG:4326 | — (MSL) | 9 | one ~2.8 GB national COG zip |
+| AusSeabed COGs | _(deferred)_ | — | — | 12–13 | per-survey; portal/WCS + coverage DB, not a urllist |
 | CHS NONNA-10/100 | `emodnet` | EPSG:4326 | verify sign | 13/11 | mirror to R2 (WCS/zip), register prepared |
 | BATNAS | `emodnet` | EPSG:4326 | — (MSL) | 10 | one-time auth fetch → R2 → prepared |
 | African Great Lakes | `ddm` | per-lake UTM | `--offset` per lake | 11 | un-.7z |
@@ -365,8 +367,9 @@ Sequenced to prove the cheap path before the awkward ones:
 - **P1 — single-file wins:** gbr30 ✅, swIOBC (one PANGAEA fetch).
 - **P2 — prepared grids:** INFOMAR ✅ (one merged 10 m zip — turned out single-file, not
   per-tile). UK SurfZone moved to P4 (no static URLs; WCS/interactive only).
-- **P3 — streamed S3:** AusSeabed — enumerate the public-bucket L3 COGs into a
-  urllist, `mixed_crs` per-survey reproject. The one with real assembly work.
+- **P3 — Australia:** AusBathyTopo 250 m national grid ✅ (clean single-file fill). The
+  per-survey 2–10 m AusSeabed COGs are deferred — served via portal/WCS + a coverage DB,
+  not a clean urllist, so they need a custom coverage-DB fetch when the detail is worth it.
 - **P4 — awkward fetch → mirror-to-R2:** NONNA (Canada), BATNAS (Indonesia), and
   UK SurfZone + CCO (England) — sidestep the WCS / login / interactive download by
   pulling once and registering from our bucket (no scraper to build).
@@ -388,6 +391,21 @@ source/coverage roadmap's "fidelity & ops" list):
 
 - **NOAA CSB** crowdsourced bathymetry as additional fill.
 - **Auto-refresh** as upstream sources update (GEBCO annual, others irregular).
+
+**Parked during the source build-out** (deferred with a reason — revisit when the
+need/effort justifies; the inline notes above point here):
+
+- **AusSeabed per-survey 2–10 m COGs** — the AU high-res (z12–13) tier. Needs a custom
+  coverage-DB/WCS enumeration (served via the portal + a survey coverage DB, not a clean
+  static urllist like CUDEM). AusBathyTopo 250 m covers AU at z9 in the meantime; gbr30
+  covers the GBR/Coral Sea at z12.
+- **UK SurfZone 2 m + CCO swath** (England intertidal) — no static URLs (WCS / interactive
+  DefraDataDownload only), EPSG:27700, ODN datum (not chart). Mirror-to-R2 fetch — tracked
+  as a P4 awkward-fetch item.
+- **IBCAO v5.2 100 m** (Arctic) — best Arctic resolution, but redistribution rights are
+  ambiguous (disclaimer-gated). Resolve the licence before building.
+- **INFOMAR 100 m offshore** — only if a deep-offshore Irish gap appears; ≈EMODnet res and
+  likely redundant with the 25 m IE-Waters grid. One-line `file_list` add.
 
 (Concrete source candidates — marine and inland, with resolution/license/datum and
 BUILD/SKIP verdicts — live in [Source expansion](#source-expansion--worldwide-coverage-candidates) above. GLOBathy and the
