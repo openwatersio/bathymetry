@@ -1,0 +1,9 @@
+{
+    "name": "INFOMAR Bathymetry 10 m (merged inshore, Ireland)",
+    "producer": "Geological Survey Ireland / Marine Institute (INFOMAR)",
+    "website": "https://www.infomar.ie/",
+    "license": "CC-BY 4.0",
+    "max_zoom": 13,
+    "priority": 1,
+    "datum": "LAT (chart datum)"
+}

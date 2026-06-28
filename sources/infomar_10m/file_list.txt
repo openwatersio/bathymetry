@@ -1,0 +1,7 @@
+# INFOMAR merged 10 m inshore bathymetry, all Irish waters, WGS84 / LAT chart datum.
+# One Float32 GeoTIFF in a ~5.5 GB zip (unzips much larger — stage it / large runner).
+# The GeoTIFF ships WITHOUT an embedded CRS → normalize assigns EPSG:4326 (--crs).
+# Values are elevation (seafloor negative, like GEBCO) → no negate. NoData 3.4e38.
+# The 25 m shelf grid is a SEPARATE source (sources/infomar_25m), mirroring cudem/cudem_third.
+# Both set priority:1 to outrank EMODnet; the 10 m wins inshore by finer max_zoom (z13 > z11).
+https://gsi.geodata.gov.ie/downloads/Marine/Data/Downloads/LatestEntireAreaMerge/IE_GSI_MI_Bathymetry_10m_Inshore_IE_WGS84_LAT_TIFF.zip

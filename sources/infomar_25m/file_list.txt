@@ -1,0 +1,7 @@
+# INFOMAR merged 25 m shelf bathymetry, full Irish EEZ ("IE Waters"), WGS84 / LAT chart datum.
+# One Float32 GeoTIFF in a ~3.2 GB zip. NO embedded CRS → normalize assigns EPSG:4326 (--crs).
+# Values are elevation (seafloor negative) → no negate. NoData 3.4e38. ~4.6x finer than EMODnet's
+# 115 m and the same survey lineage. Both INFOMAR sources set priority:1 to outrank EMODnet
+# regardless of any zoom tie; max_zoom stays the honest native (z11 for 25 m, z13 for the 10 m
+# sibling), so the 10 m wins inshore by finer max_zoom within the tier. 100 m offshore omitted.
+https://gsi.geodata.gov.ie/downloads/Marine/Data/Downloads/LatestEntireAreaMerge/IE_GSI_MI_Bathymetry_25m_IE_Waters_WGS84_LAT_TIFF.zip

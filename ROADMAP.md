@@ -210,8 +210,8 @@ Roughly in coverage-per-effort order:
 2. **[gbr30](https://files.ausseabed.gov.au/survey/Great%20Barrier%20Reef%20Bathymetry%202020%2030m.zip)** (Australia) — 30 m, CC-BY 4.0, one range-readable 3.8 GB zip of 4 COG tiles over the Great Barrier Reef + Coral Sea. z12. ✅ built (`sources/gbr30`).
 3. **[CHS NONNA-10/100](https://data.chs-shc.ca/)** (Canada) — 10 m / 100 m, **Chart Datum** (exactly the low-water datum the chart wants), OGL-Canada. Covers Canadian coasts + the Canadian Great Lakes half + the Canadian Arctic. Access B (no public COG bucket). z13 / z11.
 4. **AusSeabed survey COGs** (Australia) — 2–10 m, CC-BY 4.0, on a **public S3 bucket** (`ausseabed-public-warehouse-bathymetry`, ap-southeast-2) → pure access-A streaming like CUDEM. Patchy per-survey footprints (needs a coverage-polygon index). z12–13.
-5. **[INFOMAR](https://data-infomargis.opendata.arcgis.com/)** (Ireland) — 5–10 m (2 m best inshore), **LAT**, CC-BY 4.0. Pick the WGS84 variant. z12–13.
-6. **UK [SurfZone 2m](https://environment.data.gov.uk/dataset/77e6f743-d708-4909-a80f-9510b7dbaa16) + [CCO swath](https://maps.coastalmonitoring.org/cco/)** (England) — 1–2 m, OGL v3. England nearshore patchwork (EPSG:27700, ODN datum). z13–14.
+5. **[INFOMAR](https://www.infomar.ie/)** (Ireland) — **10 m inshore** (`sources/infomar_10m`, z13) + **25 m shelf** (`sources/infomar_25m`, z11), **LAT**, CC-BY 4.0. Two **sibling sources** (cudem/cudem_third pattern). Both set `priority: 1` to outrank EMODnet regardless of any zoom tie (decoupling precedence from zoom, like S-102 vs CUDEM); `max_zoom` stays the honest native (z13 / z11) and the 10 m wins inshore via finer maxzoom within the tier. WGS84/LAT, no embedded CRS → assign EPSG:4326. 100 m offshore omitted (≈EMODnet). ✅ built.
+6. **UK [SurfZone 2m](https://environment.data.gov.uk/dataset/77e6f743-d708-4909-a80f-9510b7dbaa16) + [CCO swath](https://maps.coastalmonitoring.org/cco/)** (England) — 1–2 m, OGL v3, EPSG:27700, **ODN datum** (topographic, not chart). No static tile URLs — download is the interactive DefraDataDownload tool or a WCS endpoint, and coverage is the narrow intertidal strip. Belongs with the **awkward-fetch sources** (mirror-to-R2 / WCS), not a clean file_list — deferred to P4. z13–14.
 7. **[BATNAS](https://tanahair.indonesia.go.id/demnas/)** (Indonesia) — 6″ (~180 m), open w/ attribution (no resale), covers the whole archipelago. Login-gated fetch → R2. z10.
 8. **[swIOBC](https://doi.pangaea.de/10.1594/PANGAEA.880618)** (SW Indian Ocean) — 250 m, CC-BY 3.0, EPSG:4326 topobathy off Kenya/Tanzania/Mozambique/Madagascar; ~2× GEBCO. One ~711 MB GeoTIFF, z9. ✅ built (`sources/swiobc`).
 9. **Inland lakes** (separate layer, pure GEBCO gap-fill): **[African Great Lakes CC0 bundle](https://dataverse.harvard.edu/dataset.xhtml?persistentId=doi:10.7910/DVN/ITCOGT)** (Victoria/Albert/Edward/George, one .7z), **[swisstopo Alpine lakes](https://data.geo.admin.ch/api/stac/v1/collections/ch.swisstopo.swissbathy3d/items)** + **[Bodensee](https://doi.org/10.1594/PANGAEA.855987)**, **[Great Salt Lake](https://doi.org/10.5066/P9DGG75W)** (0.5 m, stream the 34 GB), **[Lake Tahoe](https://pubs.usgs.gov/dds/dds-55/pacmaps/exports/lt_bathy.e00.gz)**, and **[NOAA NOS Estuarine DEMs](https://www.ncei.noaa.gov/products/estuarine-bathymetric-digital-elevation-models)** (70 US estuaries, already MLLW).
@@ -246,10 +246,10 @@ EMODnet already covers European seas **including the N. African Med shelf** (the
 
 | Source | Res | Coverage | Datum | License | Cap | Verdict (access) |
 | ------ | --- | -------- | ----- | ------- | --- | ---------------- |
-| INFOMAR | 5–10 m (2 m best) | Ireland shelf | **LAT** ✓ | CC-BY 4.0 ✓ | z12–13 | **BUILD** (B; pick WGS84 variant) |
+| INFOMAR (10 m + 25 m) | 10 m / 25 m | Ireland inshore + shelf | **LAT** ✓ | CC-BY 4.0 ✓ | z13 / z11 | **BUILT** (B; sibling sources `infomar_10m`/`infomar_25m`, cudem/cudem_third pattern; both `priority:1` to outrank EMODnet; assign EPSG:4326; 100 m skipped) |
 | Vaklodingen 20m | 20 m | Netherlands | NAP (MSL) | **CC0** ✓ | z12 | **BUILD** (B; single file, EPSG:28992) |
-| UK SurfZone DEM 2m | 2 m | England intertidal | ODN | OGL v3 ✓ | z13 | **BUILD** (B; EPSG:27700) |
-| UK CCO swath | 1–2 m | England nearshore | ODN/CD | OGL v3 ✓ | z13–14 | **BUILD** (B; per-survey patchwork) |
+| UK SurfZone DEM 2m | 2 m | England intertidal | ODN | OGL v3 ✓ | z13 | DEFER (P4) — WCS/interactive only, no static URLs; EPSG:27700; ODN not chart datum |
+| UK CCO swath | 1–2 m | England nearshore | ODN/CD | OGL v3 ✓ | z13–14 | DEFER (P4) — per-survey/interactive; pairs with SurfZone fetch |
 | UKHO ADMIRALTY EEZ surfaces | 1–5 m | UK EEZ | **Chart Datum** ✓ | OGL v3 (per-survey varies) | z13–14 | OPPORTUNISTIC (B) — vet OGL per survey, skip fee-bearing |
 | Kartverket 50m | 50 m | Norway coast + Svalbard | **LAT** ✓ | NLOD ✓ | z11–12 | OPPORTUNISTIC (B) — 2024-declassified; gappy, marginal |
 | BSH DGM 50m | 50 m | German N. Sea + Baltic | **LAT/SKN** ✓ | open (GeoNutzV) ✓ | z12 | OPPORTUNISTIC (B) — only modestly beats EMODnet |
@@ -346,8 +346,9 @@ Reuse map — which recipe each clones, and the params that change:
 | Vaklodingen ✅ | `ddm` | EPSG:28992 | — (NAP bed elev) | 12 | one file |
 | gbr30 ✅ | `emodnet` | EPSG:4326 | — (MSL) | 12 | one zip of 4 COG tiles |
 | swIOBC ✅ | `gebco` | EPSG:4326 | — | 9 | one ~711 MB GeoTIFF |
-| INFOMAR | `emodnet` | EPSG:4326 | — (LAT, neg) | 13 | enumerate WGS84 tiles |
-| UK SurfZone | `emodnet` | EPSG:27700 | — (ODN) | 13 | enumerate 5 km tiles |
+| INFOMAR ✅ | `emodnet` | EPSG:4326 (assign) | — (LAT) | 13 | 10 m inshore zip (no embedded CRS) |
+| INFOMAR 25m ✅ | `emodnet` | EPSG:4326 (assign) | — (LAT) | 11 | 25 m shelf zip; sibling source; `priority:1` (both) to beat EMODnet |
+| UK SurfZone | _(deferred → P4)_ | EPSG:27700 | — (ODN) | 13 | WCS/interactive only — no static tile URLs |
 | AusSeabed | `cudem` | `mixed_crs` | — (per-survey) | 12 | enumerate L3 S3 COG urllist |
 | CHS NONNA-10/100 | `emodnet` | EPSG:4326 | verify sign | 13/11 | mirror to R2 (WCS/zip), register prepared |
 | BATNAS | `emodnet` | EPSG:4326 | — (MSL) | 10 | one-time auth fetch → R2 → prepared |
@@ -362,11 +363,13 @@ Sequenced to prove the cheap path before the awkward ones:
 - **P0 — pilot:** Vaklodingen (CC0, single file). Proves a non-US prepared overlay
   flows source→cover→aggregate→bundle→preview end-to-end. Smallest possible diff.
 - **P1 — single-file wins:** gbr30 ✅, swIOBC (one PANGAEA fetch).
-- **P2 — multi-tile prepared:** INFOMAR, UK SurfZone (build the tile `file_list`).
+- **P2 — prepared grids:** INFOMAR ✅ (one merged 10 m zip — turned out single-file, not
+  per-tile). UK SurfZone moved to P4 (no static URLs; WCS/interactive only).
 - **P3 — streamed S3:** AusSeabed — enumerate the public-bucket L3 COGs into a
   urllist, `mixed_crs` per-survey reproject. The one with real assembly work.
-- **P4 — mirror-to-R2:** NONNA (Canada), BATNAS (Indonesia) — sidestep the WCS /
-  login fetch by pulling once and registering from our bucket (no scraper to build).
+- **P4 — awkward fetch → mirror-to-R2:** NONNA (Canada), BATNAS (Indonesia), and
+  UK SurfZone + CCO (England) — sidestep the WCS / login / interactive download by
+  pulling once and registering from our bucket (no scraper to build).
 - **P5 — inland lakes layer:** confirm a lake overlay bundles with no false land,
   then African Great Lakes / swisstopo+Bodensee / Tahoe / Great Salt Lake / NOS
   estuaries. Shared mechanic = lakebed elevation→depth via `source_datum --offset`.
