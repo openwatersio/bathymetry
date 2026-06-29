@@ -527,3 +527,18 @@ jobs:
         run: |
           aws s3 cp store/bundle/contours.pmtiles "s3://$DATA_BUCKET/bathymetry/build/${{ github.sha }}/contours.pmtiles" \
             --content-type application/octet-stream
+
+  # A complete build (terrain manifest + contours both landed) auto-promotes itself:
+  # dispatch release.yml for this exact sha. Only main builds deploy to production —
+  # a build dispatched from a feature branch still writes build/<sha>/, but won't ship.
+  release:
+    needs: [bundle-merge, contour-bundle]
+    if: ${{ github.ref == 'refs/heads/main' && needs.bundle-merge.result == 'success' && needs.contour-bundle.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions: { actions: write }
+    steps:
+      - name: Dispatch release for this build
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh workflow run release.yml -f sha=${{ github.sha }}
