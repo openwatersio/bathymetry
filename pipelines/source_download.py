@@ -24,6 +24,21 @@ def ext_for(url):
     return ext if ext in DATA_EXTS else "tif"
 
 
+def fix_archive_ext(dest):
+    """Rename to .zip when the bytes are a zip but the URL gave no extension to say so
+    (e.g. Defra's survey tile API serves .../survey/.../2/SS6045 as application/zip).
+    ext_for can't tell from the URL, so source_unzip would miss it. GDAL still reads
+    tif/nc by content regardless — only archives need the right name for the unzip step."""
+    if dest.endswith(".zip"):
+        return dest
+    with open(dest, "rb") as f:
+        if f.read(4) != b"PK\x03\x04":
+            return dest
+    zdest = dest.rsplit(".", 1)[0] + ".zip"
+    os.replace(dest, zdest)
+    return zdest
+
+
 def main():
     if len(sys.argv) != 2:
         sys.exit("usage: source_download.py <source-id>")
@@ -37,7 +52,27 @@ def main():
         dest = f"store/source/{source}/{source}_{i}.{ext_for(url)}"
         print(f"  [{i}] {url} -> {dest}")
         utils.http_download(url, dest)
+        fix_archive_ext(dest)
+
+
+def _check():
+    import tempfile
+    assert ext_for("https://x/y/SS6045?subscription-key=dspui") == "tif"  # extensionless URL
+    assert ext_for("https://x/y/a.zip?q=1") == "zip"
+    d = tempfile.mkdtemp()
+    zpath = os.path.join(d, "s_0.tif")  # zip bytes saved under the .tif fallback name
+    with open(zpath, "wb") as f:
+        f.write(b"PK\x03\x04rest")
+    assert fix_archive_ext(zpath) == os.path.join(d, "s_0.zip")
+    tpath = os.path.join(d, "s_1.tif")  # real tif keeps its name
+    with open(tpath, "wb") as f:
+        f.write(b"II*\x00")
+    assert fix_archive_ext(tpath) == tpath
+    print("source_download.py self-check ok")
 
 
 if __name__ == "__main__":
-    main()
+    if sys.argv[1:2] == ["--check"]:
+        _check()
+    else:
+        main()
