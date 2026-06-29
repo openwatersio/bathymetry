@@ -208,7 +208,7 @@ Roughly in coverage-per-effort order:
 
 1. **[Vaklodingen 20m](https://downloads.rijkswaterstaatdata.nl/bodemhoogte_20mtr/bodemhoogte_20mtr.tif)** (Netherlands) — 20 m, **CC0**, a single ~97 MB GeoTIFF (EPSG:28992). Cleanest ingest in the catalog. z12. ✅ built (`sources/vaklodingen`).
 2. **[gbr30](https://files.ausseabed.gov.au/survey/Great%20Barrier%20Reef%20Bathymetry%202020%2030m.zip)** (Australia) — 30 m, CC-BY 4.0, one range-readable 3.8 GB zip of 4 COG tiles over the Great Barrier Reef + Coral Sea. z12. ✅ built (`sources/gbr30`).
-3. **[CHS NONNA](https://data.chs-shc.ca/)** (Canada) — **Chart Datum** (exactly the low-water datum the chart wants), open CHS licence. Covers Canadian coasts + the Cdn Great Lakes half + the Cdn Arctic. No static URLs, but a **public guest API** (reverse-engineered): `pipelines/source_download_nonna.py` harvests tiles for a BBOX (guest token → feature query → objectstore download — no account). **NONNA-100 built** (`sources/nonna_100`, EPSG:4326, elevation on CD/no-negate, z10). NONNA-10 (z13) is a follow-up (confirm its RepresentationLevel; a national 10 m harvest is hundreds of GB).
+3. **[CHS NONNA](https://data.chs-shc.ca/)** (Canada) — **Chart Datum** (exactly the low-water datum the chart wants), open CHS licence. Covers Canadian coasts + the Cdn Great Lakes half + the Cdn Arctic. No static URLs, but a **public guest API** (reverse-engineered): `pipelines/source_download_nonna.py` harvests tiles for a BBOX (guest token → feature query → objectstore download — no account). **NONNA-100 + NONNA-10 both built** — sibling sources `sources/nonna_100` (z10) and `sources/nonna_10` (z13, RepresentationLevel 5), cudem/cudem_third pattern; EPSG:4326, elevation on CD/no-negate. Caveat: a *national* 10 m harvest is hundreds of GB — scope by region for real builds.
 4. **[AusBathyTopo 250m](https://www.ausseabed.gov.au/data/bathymetry)** (Australia) — national 250 m bathy/topo compilation, CC-BY 4.0, MSL, EPSG:4326. One ~2.8 GB COG zip; fills the AU EEZ at z9 (gbr30 wins the GBR/Coral Sea overlap). ✅ built (`sources/ausbathytopo`). *The per-survey 2–10 m AusSeabed COGs — the z12–13 prize — are **deferred**: served via portal/WCS + a survey coverage DB, not a clean static urllist, so they need a custom coverage-DB fetch.*
 5. **[INFOMAR](https://www.infomar.ie/)** (Ireland) — **10 m inshore** (`sources/infomar_10m`, z13) + **25 m shelf** (`sources/infomar_25m`, z11), **LAT**, CC-BY 4.0. Two **sibling sources** (cudem/cudem_third pattern). Both set `priority: 1` to outrank EMODnet regardless of any zoom tie (decoupling precedence from zoom, like S-102 vs CUDEM); `max_zoom` stays the honest native (z13 / z11) and the 10 m wins inshore via finer maxzoom within the tier. WGS84/LAT, no embedded CRS → assign EPSG:4326. 100 m offshore omitted (≈EMODnet). ✅ built.
 6. **UK [SurfZone 2m](https://environment.data.gov.uk/dataset/77e6f743-d708-4909-a80f-9510b7dbaa16) + [CCO swath](https://maps.coastalmonitoring.org/cco/)** (England) — 1–2 m, OGL v3, EPSG:27700, **ODN datum** (topographic, not chart). No static tile URLs — download is the interactive DefraDataDownload tool or a WCS endpoint, and coverage is the narrow intertidal strip. Belongs with the **awkward-fetch sources** (mirror-to-R2 / WCS), not a clean file_list — deferred to P4. z13–14.
@@ -223,7 +223,7 @@ EMODnet already covers European seas **including the N. African Med shelf** (the
 | Source | Res | Coverage | Datum | License | Cap | Verdict (access) |
 | ------ | --- | -------- | ----- | ------- | --- | ---------------- |
 | CHS NONNA-100 | ~100 m | Cdn coasts + Great Lakes + Cdn Arctic | **Chart Datum** ✓ | open CHS licence ✓ | z10 | **BUILT** — guest-API harvest via `source_download_nonna` |
-| CHS NONNA-10 | ~10 m | same | Chart Datum ✓ | open CHS licence ✓ | z13 | BUILD (follow-up) — same harvester; confirm 10 m level, national = 100s of GB |
+| CHS NONNA-10 | ~10 m | same | Chart Datum ✓ | open CHS licence ✓ | z13 | **BUILT** — same harvester, RepresentationLevel 5; national 10 m = 100s of GB (scope by region) |
 | IBCSO v2 | 500 m (≈GEBCO) | Southern Ocean, N→50°S | MSL | CC-BY 4.0 ✓ | — | **SKIP** — ≈GEBCO res AND already folded into GEBCO via Seabed 2030 (no new coverage); <85°S untileable |
 | IBCAO v5.2 | 100 m | Arctic, S→64°N | MSL | ⚠ disclaimer-gated, ambiguous | z11 | OPPORTUNISTIC — **verify redistribution first**; EPSG:3996 |
 | GMRT v4.x | ~100 m (multibeam only) | global swaths | mixed | CC-BY 4.0 ✓ | z9–12 | OPPORTUNISTIC — dynamic GridServer, targeted fill only |
@@ -352,7 +352,8 @@ Reuse map — which recipe each clones, and the params that change:
 | UK SurfZone | _(deferred → P4)_ | EPSG:27700 | — (ODN) | 13 | WCS/interactive only — no static tile URLs |
 | AusBathyTopo ✅ | `emodnet` | EPSG:4326 | — (MSL) | 9 | one ~2.8 GB national COG zip |
 | AusSeabed COGs | _(deferred)_ | — | — | 12–13 | per-survey; portal/WCS + coverage DB, not a urllist |
-| CHS NONNA-100 ✅ | _custom_ | EPSG:4326 | — (Chart Datum) | 10 | guest-API harvest (`source_download_nonna`), not mirror-to-R2 |
+| CHS NONNA-100 ✅ | _custom_ | EPSG:4326 | — (Chart Datum) | 10 | guest-API harvest (`source_download_nonna`, level 2), not mirror-to-R2 |
+| CHS NONNA-10 ✅ | _custom_ | EPSG:4326 | — (Chart Datum) | 13 | same harvester, level 5; sibling of nonna_100 |
 | BATNAS | `emodnet` | EPSG:4326 | — (MSL) | 10 | one-time auth fetch → R2 → prepared |
 | African Great Lakes | `ddm` | per-lake UTM | `--offset` per lake | 11 | un-.7z |
 | swisstopo + Bodensee | `ddm` | 2056 / 25832 | `--offset` (LN02/DHHN92→0) | 14 | STAC / PANGAEA |
@@ -406,12 +407,11 @@ need/effort justifies; the inline notes above point here):
   ambiguous (disclaimer-gated). Resolve the licence before building.
 - **INFOMAR 100 m offshore** — only if a deep-offshore Irish gap appears; ≈EMODnet res and
   likely redundant with the 25 m IE-Waters grid. One-line `file_list` add.
-- **NONNA-10** (Canada, 10 m, z13) — same `source_download_nonna` harvester; confirm the 10 m
-  `RepresentationLevel` and note a national 10 m harvest is hundreds of GB (do it by region).
-- **NONNA coverage-polygon fragmentation** — NONNA's per-tile data is sparse multibeam swaths,
-  so `source_polygonize` traces every nodata hole (~1 M vertices for 15 tiles). Fine at the
-  current scale; for a national harvest, simplify/dissolve the footprint or use tile-bbox
-  coverage instead of pixel-exact.
+- **NONNA national harvest** — both NONNA sources (10 m + 100 m) are built and validated by
+  region; a *national* harvest (esp. 10 m, hundreds of GB) needs region-scoped BBOX runs, and
+  the coverage polygon needs simplifying: NONNA's sparse multibeam swaths make `source_polygonize`
+  trace every nodata hole (~1 M vertices for 15 tiles), so dissolve/simplify the footprint (or
+  use tile-bbox coverage) at national scale.
 
 (Concrete source candidates — marine and inland, with resolution/license/datum and
 BUILD/SKIP verdicts — live in [Source expansion](#source-expansion--worldwide-coverage-candidates) above. GLOBathy and the
