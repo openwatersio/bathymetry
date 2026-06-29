@@ -31,6 +31,28 @@ const contourMax = manifest
     )
   : MAX_ZOOM;
 
+// ─── Source coverage (provenance) ───────────────────────────────────────────
+// The `coverage` layer baked into contours.pmtiles (source footprints, props
+// source_id / source_name / source_maxzoom). Drawn as polygons and queried on click to
+// report which source a depth came from. Colour each source by id off the manifest list
+// (a match expression); footprints of sources not in the manifest fall back to grey.
+const COVERAGE_PALETTE = [
+  "#e6194b", "#3cb44b", "#f032e6", "#4363d8", "#f58231",
+  "#911eb4", "#008080", "#9a6324", "#800000", "#000075",
+];
+const coverageColor =
+  manifest && manifest.sources.length
+    ? [
+        "match",
+        ["get", "source_id"],
+        ...manifest.sources.flatMap((s, i) => [
+          s.id,
+          COVERAGE_PALETTE[i % COVERAGE_PALETTE.length],
+        ]),
+        "#888",
+      ]
+    : "#f58231";
+
 // ─── Map style ────────────────────────────────────────────────────────────
 const style = {
   version: 8,
@@ -149,6 +171,50 @@ const style = {
         "text-color": "#777",
       },
     },
+    {
+      id: "source-fill",
+      type: "fill",
+      source: "contours",
+      "source-layer": "coverage",
+      // Hidden by default (the toggle starts unchecked); turning it on enables click-to-identify.
+      layout: { visibility: "none" },
+      paint: { "fill-color": coverageColor, "fill-opacity": 0.12 },
+    },
+    {
+      // Brightened fill of the source a click landed in; filter set on click.
+      id: "source-highlight",
+      type: "fill",
+      source: "contours",
+      "source-layer": "coverage",
+      filter: ["==", ["get", "source_id"], "__none__"],
+      layout: { visibility: "none" },
+      paint: { "fill-color": coverageColor, "fill-opacity": 0.4 },
+    },
+    {
+      id: "source-outline",
+      type: "line",
+      source: "contours",
+      "source-layer": "coverage",
+      layout: { visibility: "none" },
+      paint: { "line-color": coverageColor, "line-width": 1.5 },
+    },
+    {
+      id: "source-labels",
+      type: "symbol",
+      source: "contours",
+      "source-layer": "coverage",
+      layout: {
+        visibility: "none",
+        "text-field": ["get", "source_name"],
+        "text-size": 11,
+        "text-font": ["Open Sans Regular"],
+      },
+      paint: {
+        "text-color": coverageColor,
+        "text-halo-color": "#fff",
+        "text-halo-width": 1.2,
+      },
+    },
   ],
 };
 
@@ -163,11 +229,13 @@ window.map = map; // exposed for debugging / verification
 
 map.addControl(new maplibregl.NavigationControl());
 
-// Enable terrain so queryTerrainElevation() can read from the DEM.
-// exaggeration: 0 keeps the map visually flat.
-map.on("load", () => {
-  map.setTerrain({ source: "terrain-dem", exaggeration: 0.0001 });
-});
+// No setTerrain(): enabling 3D terrain drapes the DEM layers (depth-shading, hillshade)
+// over MapLibre's terrain mesh, which resamples the land+water DEM coarsely below native
+// zoom. Near coasts the large positive land values bleed across the 0 m transparency
+// cutoff, so narrow/shallow water (bays, sounds, shoals) renders transparent at z<8 —
+// leaving only the deep open water, which then looks like coarse GEBCO. color-relief reads
+// the tiles at native resolution instead. Click-depth reads the DEM tile directly
+// (readElevation), so terrain isn't needed for it. Re-add behind a toggle for 3D seafloor.
 
 // ─── Layer toggles ────────────────────────────────────────────────────────
 const toggles = {
@@ -175,6 +243,12 @@ const toggles = {
   "toggle-hillshade": ["hillshade"],
   "toggle-contours": ["contour-lines"],
   "toggle-labels": ["contour-labels"],
+  "toggle-sources": [
+    "source-fill",
+    "source-highlight",
+    "source-outline",
+    "source-labels",
+  ],
 };
 
 map.on("load", () => {
@@ -189,22 +263,75 @@ map.on("load", () => {
 });
 
 // ─── Click to inspect ─────────────────────────────────────────────────────
-map.on("click", (e) => {
-  // Read elevation from terrain-RGB DEM tiles
-  const eleRaw = map.queryTerrainElevation(e.lngLat);
-  if (eleRaw == null) return;
+// Decode the elevation straight from the DEM tile pixel (Terrarium). This reads the tile
+// at native resolution — unlike queryTerrainElevation, which needs 3D terrain enabled and
+// samples the coarse terrain mesh (it reads land over deep water near the coast).
+async function readElevation(lngLat) {
+  const z = Math.min(Math.round(map.getZoom()), MAX_ZOOM);
+  const n = 2 ** z;
+  const fx = ((lngLat.lng + 180) / 360) * n;
+  const fy =
+    ((1 - Math.asinh(Math.tan((lngLat.lat * Math.PI) / 180)) / Math.PI) / 2) * n;
+  const X = Math.floor(fx);
+  const Y = Math.floor(fy);
+  const px = Math.min(511, Math.floor((fx - X) * 512));
+  const py = Math.min(511, Math.floor((fy - Y) * 512));
+  const r = await fetch(`${tilesBase}/${z}/${X}/${Y}.webp`);
+  if (!r.ok) return null;
+  const bmp = await createImageBitmap(await r.blob());
+  const cx = new OffscreenCanvas(512, 512).getContext("2d");
+  cx.drawImage(bmp, 0, 0);
+  const [r8, g8, b8] = cx.getImageData(px, py, 1, 1).data;
+  return r8 * 256 + g8 + b8 / 256 - 32768; // Terrarium decode → metres
+}
 
-  // queryTerrainElevation returns elevation * exaggeration
-  const exaggeration = map.getTerrain()?.exaggeration || 1;
-  const ele = eleRaw / exaggeration;
-  const depth = Math.round(-ele);
-  const depthFt = Math.round(depth * 3.28084);
-  const label =
-    ele <= 0 ? `${depth}m (${depthFt}ft)` : `${Math.round(ele)}m elevation`;
+// Which source covers a clicked point: the deepest footprint wins (lex-first id on a
+// tie), matching the build's merge rule, so this names the source the depth came from.
+// undefined → coverage layer hidden (skip the line); null → no footprint here = GEBCO.
+function sourceAt(point) {
+  if (map.getLayoutProperty("source-fill", "visibility") === "none")
+    return undefined;
+  const hits = map.queryRenderedFeatures(point, { layers: ["source-fill"] });
+  if (!hits.length) return null;
+  return hits
+    .map((f) => f.properties)
+    .sort(
+      (a, b) =>
+        b.source_maxzoom - a.source_maxzoom ||
+        (a.source_id < b.source_id ? -1 : 1),
+    )[0];
+}
+
+map.on("click", async (e) => {
+  const ele = await readElevation(e.lngLat);
+  const src = sourceAt(e.point);
+  if (map.getLayer("source-highlight"))
+    map.setFilter("source-highlight", [
+      "==",
+      ["get", "source_id"],
+      src?.source_id ?? "__none__",
+    ]);
+
+  const lines = [];
+  if (ele != null) {
+    const depth = Math.round(-ele);
+    lines.push(
+      `<strong>${
+        ele <= 0
+          ? `${depth}m (${Math.round(depth * 3.28084)}ft)`
+          : `${Math.round(ele)}m elevation`
+      }</strong>`,
+    );
+  }
+  if (src !== undefined)
+    lines.push(
+      `<small>source: ${src ? src.source_name : "GEBCO (global)"}</small>`,
+    );
+  if (!lines.length) return;
 
   new maplibregl.Popup()
     .setLngLat(e.lngLat)
-    .setHTML(`<strong>${label}</strong>`)
+    .setHTML(lines.join("<br>"))
     .addTo(map);
 });
 

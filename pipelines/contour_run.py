@@ -191,6 +191,89 @@ def _global_maxz(fgbs):
     return max(int(f.split("/")[-1].replace(".fgb", "").split("-")[3]) for f in fgbs)
 
 
+# ── source coverage (provenance) layer ───────────────────────────────────────
+# Tile each source's union footprint (store/polygon/<id>.gpkg, from the source stage)
+# into a `coverage` layer alongside `contours` in the same pmtiles, so the viewer can
+# show which source covers a clicked point — ROADMAP Milestone 5.3, "tile straight from
+# the coverage polygons." GEBCO (the global base) declares no max_zoom, so it's skipped;
+# only regional footprints get a polygon.
+
+BASE_SOURCE = "gebco"  # the global fallback; its footprint is the whole planet, never an overlay
+
+
+def _source_maxzooms():
+    """{source: native maxzoom} from the newest covering's aggregation CSVs — the pipeline's
+    authoritative per-source zoom (resolution-derived, capped/floored). Empty when no covering
+    is local (a CI contour job). Note: metadata.json's max_zoom is only an optional *cap*, so
+    most regional sources don't carry it — read the real zoom from the covering instead."""
+    ids = utils.get_aggregation_ids()
+    if not ids:
+        return {}
+    mz = {}
+    for csv in glob(f"store/aggregation/{ids[-1]}/*-aggregation.csv"):
+        with open(csv) as f:
+            for line in f.readlines()[1:]:
+                s, _fn, z = line.strip().split(",")
+                mz[s] = max(mz.get(s, 0), int(z))
+    return mz
+
+
+def _coverage_geojson():
+    """Combine every regional source's simplified footprint into one GeoJSON FC with
+    {source_id, source_name, source_maxzoom}; write it and return the path. None if no
+    polygons are present locally (e.g. a CI contour job that only pulled FGB slices)."""
+    valid = set(config.sources())
+    zmax = _source_maxzooms()
+    feats = []
+    for gpkg in sorted(glob("store/polygon/*.gpkg")):
+        sid = gpkg.split("/")[-1].replace(".gpkg", "")
+        if sid not in valid or sid == BASE_SOURCE:  # orphan polygon, or the global base — skip
+            continue
+        meta = config.load_metadata(sid)
+        out = subprocess.run(
+            ["ogr2ogr", "-f", "GeoJSON", "/vsistdout/", gpkg,
+             "-simplify", "0.001", "-lco", "COORDINATE_PRECISION=5"],
+            capture_output=True, text=True, check=True).stdout
+        for f in json.loads(out).get("features", []):
+            # source_maxzoom drives the viewer's deepest-wins pick on overlap (priority isn't
+            # folded in — a higher-priority shallower source would mis-attribute; rare today).
+            f["properties"] = {"source_id": sid, "source_name": meta.get("name", sid),
+                               "source_maxzoom": zmax.get(sid) or meta.get("max_zoom") or 0}
+            feats.append(f)
+    if not feats:
+        return None
+    path = "store/contour/coverage.geojson"
+    utils.create_folder("store/contour")
+    with open(path, "w") as f:
+        json.dump({"type": "FeatureCollection", "features": feats}, f)
+    return path
+
+
+def _coverage_pmtiles(maxz):
+    """tippecanoe the source footprints into store/bundle/coverage.pmtiles (layer
+    `coverage`, z0..maxz, footprints kept whole). None when no footprints are local."""
+    src = _coverage_geojson()
+    if not src:
+        return None
+    out = "store/contour/coverage.pmtiles"  # intermediate (not store/bundle, which seed.sh ships)
+    subprocess.run(
+        ["tippecanoe", "-o", out, "-f", "-l", "coverage", "-n", "Source coverage",
+         "-A", utils.ATTRIBUTION, "-Z", "0", "-z", str(maxz), "-P", "-q",
+         "--no-tile-size-limit", src], check=True)
+    return out
+
+
+def _finalize_contours(contour_pmtiles, maxz):
+    """tile-join the contour pmtiles (one local build or the CI shards) + the coverage
+    layer into store/bundle/contours.pmtiles. -pk keeps every feature of both layers;
+    coverage is dropped from the join when no footprints are present locally."""
+    cov = _coverage_pmtiles(maxz)
+    inputs = list(contour_pmtiles) + ([cov] if cov else [])
+    subprocess.run(["tile-join", "-o", "store/bundle/contours.pmtiles", "-f", "-pk", *inputs],
+                   check=True)
+    return cov is not None
+
+
 def _current_stems():
     """{z}-{x}-{y}-{child_z} of every tile in the newest covering — the only contour
     FGBs that belong in the bundle. None when no covering is present locally (the CI
@@ -227,20 +310,34 @@ def bundle(shard=None):
     maxzfile = "store/contour-maxz.txt"
     maxz = int(open(maxzfile).read().strip()) if os.path.isfile(maxzfile) else _global_maxz(fgbs)
     utils.create_folder("store/bundle")
-    out = "store/bundle/contours.pmtiles" if shard is None else f"store/bundle/contours-shard-{shard}.pmtiles"
-    _tippecanoe(fgbs, 0, maxz, out)
-    print(f"contour {'bundle' if shard is None else f'shard {shard}'}: {out} (z0-{maxz}, {len(fgbs)} FGBs)")
+    if shard is not None:  # CI: lines only; coverage joins once at the merge step
+        out = f"store/bundle/contours-shard-{shard}.pmtiles"
+        _tippecanoe(fgbs, 0, maxz, out)
+        print(f"contour shard {shard}: {out} (z0-{maxz}, {len(fgbs)} FGBs)")
+        return
+    # Local whole-set: tippecanoe the lines, then fold in the coverage layer.
+    lines = "store/contour/contours-lines.pmtiles"
+    _tippecanoe(fgbs, 0, maxz, lines)
+    cov = _finalize_contours([lines], maxz)
+    os.remove(lines)
+    print(f"contour bundle: store/bundle/contours.pmtiles (z0-{maxz}, {len(fgbs)} FGBs"
+          f"{', + coverage layer' if cov else ''})")
 
 
 def bundle_merge():
-    """tile-join the per-shard contour pmtiles into one contours.pmtiles (-pk keeps
-    every feature; the shards are disjoint FGB slices unioned per tile)."""
+    """tile-join the per-shard contour pmtiles + the coverage layer into one
+    contours.pmtiles (-pk keeps every feature; the shards are disjoint FGB slices
+    unioned per tile)."""
     shards = sorted(glob("store/bundle/contours-shard-*.pmtiles"))
     if not shards:
         print("contour merge: no shard pmtiles")
         return
-    subprocess.run(["tile-join", "-o", "store/bundle/contours.pmtiles", "-f", "-pk", *shards], check=True)
-    print(f"contour merge: store/bundle/contours.pmtiles ({len(shards)} shards)")
+    maxzfile = "store/contour-maxz.txt"  # the CI shard path always writes this (shared global maxz)
+    if not os.path.isfile(maxzfile):
+        raise SystemExit("contour merge: store/contour-maxz.txt missing (the shard jobs write it)")
+    cov = _finalize_contours(shards, int(open(maxzfile).read().strip()))
+    print(f"contour merge: store/bundle/contours.pmtiles ({len(shards)} shards"
+          f"{', + coverage layer' if cov else ''})")
 
 
 def _check():
