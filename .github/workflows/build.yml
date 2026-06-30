@@ -512,6 +512,9 @@ jobs:
         run: |
           aws s3 cp store/bundle "s3://$DATA_BUCKET/bathymetry/build/${{ github.sha }}/contour-shards/" \
             --recursive --exclude '*' --include 'contours-shard-*.pmtiles' --content-type application/octet-stream
+          # Global contour maxz (identical from every shard) — contour-bundle's merge needs
+          # it to tile the coverage layer to the same depth as the contours.
+          aws s3 cp store/contour-maxz.txt "s3://$DATA_BUCKET/bathymetry/build/${{ github.sha }}/contour-maxz.txt"
 
   # tile-join the per-shard pmtiles into one contours.pmtiles.
   contour-bundle:
@@ -526,6 +529,7 @@ jobs:
         run: |
           mkdir -p store/bundle
           aws s3 sync "s3://$DATA_BUCKET/bathymetry/build/${{ github.sha }}/contour-shards" store/bundle
+          aws s3 cp "s3://$DATA_BUCKET/bathymetry/build/${{ github.sha }}/contour-maxz.txt" store/contour-maxz.txt
       - name: Merge contours
         run: docker run --rm -v "$PWD/store:/app/pipelines/store" "$IMAGE:${{ github.sha }}" just contour-merge
       - name: Push contours.pmtiles to R2 build
