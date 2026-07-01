@@ -1,8 +1,8 @@
 /**
  * Unified bathymetry tile endpoint.
  *
- *   GET /bathymetry/{z}/{x}/{y}.webp  (or .png)  → Terrarium WebP (raster terrain)
- *   GET /bathymetry/{z}/{x}/{y}.pbf   (or .mvt)  → MVT (vector — contours, more layers later)
+ *   GET /seascape/{z}/{x}/{y}.webp  (or .png)  → Terrarium WebP (raster terrain)
+ *   GET /seascape/{z}/{x}/{y}.pbf   (or .mvt)  → MVT (vector — contours, more layers later)
  *
  * Extension picks the representation: webp/png → raster, pbf/mvt → vector.
  *
@@ -42,8 +42,8 @@ function ensureCodec(): Promise<void> {
 
 export interface Env {
   TILES: R2Bucket;
-  RELEASE_PREFIX?: string; // R2 key prefix selecting which release to serve, e.g. "bathymetry/<sha>/"; default ""
-  BASE_PATH?: string; // URL mount path = the Cloudflare route prefix; default "/bathymetry"
+  RELEASE_PREFIX?: string; // R2 key prefix selecting which release to serve, e.g. "seascape/<sha>/"; default ""
+  BASE_PATH?: string; // URL mount path = the Cloudflare route prefix; default "/seascape"
 }
 
 interface BundleMeta {
@@ -269,7 +269,7 @@ export default {
     // dev at root — tolerate both: strip it when present, else treat the path as
     // already relative. `mount` is echoed back into TileJSON tile URLs so they
     // stay correct either way.
-    const base = (env.BASE_PATH ?? "/bathymetry").replace(/\/+$/, "");
+    const base = (env.BASE_PATH ?? "/seascape").replace(/\/+$/, "");
     const mounted =
       base !== "" && (path === base || path.startsWith(base + "/"));
     const rel = mounted ? path.slice(base.length) : path;

@@ -6,7 +6,7 @@ import "maplibre-gl/dist/maplibre-gl.css";
 //   {base}/{z}/{x}/{y}.webp   — Terrarium terrain raster (planet + overlays, overzoomed)
 //   {base}/{z}/{x}/{y}.pbf    — MVT vector (contours, more layers later)
 // VITE_TILES_BASE is the full bathymetry endpoint base — it includes the
-// /bathymetry route prefix in prod (e.g. https://tiles.openwaters.io/bathymetry);
+// /seascape route prefix in prod (e.g. https://tiles.openwaters.io/seascape);
 // the dev default points at the worker root. VITE_BBOX sets the initial view.
 const BBOX = import.meta.env.VITE_BBOX
   ? import.meta.env.VITE_BBOX.split(",").map(Number)

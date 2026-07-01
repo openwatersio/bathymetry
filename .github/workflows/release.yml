@@ -24,7 +24,7 @@ env:
   AWS_ENDPOINT_URL: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
 
 jobs:
-  # Promote data:bathymetry/build/<sha>/ → tiles:bathymetry/<sha>/ — a cross-bucket
+  # Promote data:bathymetry/build/<sha>/ → tiles:seascape/<sha>/ — a cross-bucket
   # server-side copy out of the build bucket into the Worker-fronted serving bucket (no
   # rebuild). build/ is GC'd after 7 days; the tiles bucket has NO lifecycle rule, so the
   # live bundle is never collected out from under the Worker regardless of release
@@ -38,10 +38,10 @@ jobs:
     steps:
       - name: Promote build → tiles bucket
         run: |
-          echo "publishing bathymetry/build/$SHA → tiles:bathymetry/$SHA"
+          echo "publishing bathymetry/build/$SHA → tiles:seascape/$SHA"
           # manifest.json is copied last, so its presence means a complete prior promotion.
-          if aws s3 ls "s3://$TILES_BUCKET/bathymetry/$SHA/manifest.json" >/dev/null 2>&1; then
-            echo "tiles:bathymetry/$SHA already published — skipping promote"
+          if aws s3 ls "s3://$TILES_BUCKET/seascape/$SHA/manifest.json" >/dev/null 2>&1; then
+            echo "tiles:seascape/$SHA already published — skipping promote"
             exit 0
           fi
           if ! aws s3 ls "s3://$DATA_BUCKET/bathymetry/build/$SHA/manifest.json" >/dev/null 2>&1; then
@@ -56,27 +56,27 @@ jobs:
           # the runner (the upload sends no tagging header); contour-maxz.txt is a build-only
           # handoff, so it's just excluded like contour-shards/bundle-frags. New *promoted*
           # small files need the round-trip too; lower the threshold or switch to rclone.
-          aws s3 cp "s3://$DATA_BUCKET/bathymetry/build/$SHA/" "s3://$TILES_BUCKET/bathymetry/$SHA/" \
+          aws s3 cp "s3://$DATA_BUCKET/bathymetry/build/$SHA/" "s3://$TILES_BUCKET/seascape/$SHA/" \
             --recursive --exclude 'contour-shards/*' --exclude 'bundle-frags/*' \
             --exclude 'manifest.json' --exclude 'contour-maxz.txt' --copy-props none
           aws s3 cp "s3://$DATA_BUCKET/bathymetry/build/$SHA/manifest.json" - \
-            | aws s3 cp - "s3://$TILES_BUCKET/bathymetry/$SHA/manifest.json" --content-type application/json
+            | aws s3 cp - "s3://$TILES_BUCKET/seascape/$SHA/manifest.json" --content-type application/json
       - name: Prune old releases (keep newest 3)
         run: |
           # Count-based retention (current + 2 rollback targets), ordered by each
           # release's manifest.json mtime — never age/cadence dependent, so the tiles
           # bucket needs no lifecycle rule. The copy above runs first, so $SHA is always kept.
-          keep=$(aws s3 ls "s3://$TILES_BUCKET/bathymetry/" --recursive \
+          keep=$(aws s3 ls "s3://$TILES_BUCKET/seascape/" --recursive \
             | grep '/manifest\.json$' | sort -r | awk '{print $4}' | cut -d/ -f2 | head -3)
           [ -n "$keep" ] || { echo "::error::no releases found — refusing to prune"; exit 1; }
-          for sha in $(aws s3 ls "s3://$TILES_BUCKET/bathymetry/" | awk '{print $2}' | tr -d /); do
+          for sha in $(aws s3 ls "s3://$TILES_BUCKET/seascape/" | awk '{print $2}' | tr -d /); do
             grep -qx "$sha" <<<"$keep" || {
-              echo "pruning bathymetry/$sha"
-              aws s3 rm "s3://$TILES_BUCKET/bathymetry/$sha" --recursive
+              echo "pruning seascape/$sha"
+              aws s3 rm "s3://$TILES_BUCKET/seascape/$sha" --recursive
             }
           done
 
-  # Deploy the serving Worker pointed at bathymetry/<sha>/. This deploy IS the atomic
+  # Deploy the serving Worker pointed at seascape/<sha>/. This deploy IS the atomic
   # cutover: Cloudflare rolls the new version globally as a unit, so no client ever
   # sees a mix of old/new bundles. Rollback = re-dispatch with a prior (kept) sha.
   deploy-worker:
@@ -99,7 +99,7 @@ jobs:
           # Bind the same bucket the build writes to; wrangler.toml can't read env vars,
           # so overwrite the placeholder name at deploy (keeps worker + build in sync).
           sed -i "s|^bucket_name = .*|bucket_name = \"$TILES_BUCKET\"|" wrangler.toml
-          npx wrangler deploy --var "RELEASE_PREFIX:bathymetry/$SHA/"
+          npx wrangler deploy --var "RELEASE_PREFIX:seascape/$SHA/"
 
   # Build the viewer (pointed at the Worker) and deploy it to GitHub Pages.
   deploy-pages:
@@ -115,7 +115,7 @@ jobs:
         with: { node-version: 22, cache: npm }
       - name: Build viewer
         env:
-          VITE_TILES_BASE: https://tiles.openwaters.io/bathymetry
+          VITE_TILES_BASE: https://tiles.openwaters.io/seascape
         run: |
           npm ci
           npm run build -- --base=/${{ github.event.repository.name }}/
@@ -151,7 +151,7 @@ jobs:
               fail=1
             fi
           }
-          check "raster tile"     200 "$BASE/bathymetry/0/0/0.webp"            image/webp
-          check "vector tile"     200 "$BASE/bathymetry/0/0/0.pbf"             protobuf
-          check "raster.json"     200 "$BASE/bathymetry/raster.json"           json
+          check "raster tile"     200 "$BASE/seascape/0/0/0.webp"            image/webp
+          check "vector tile"     200 "$BASE/seascape/0/0/0.pbf"             protobuf
+          check "raster.json"     200 "$BASE/seascape/raster.json"           json
           exit $fail

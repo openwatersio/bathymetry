@@ -110,10 +110,10 @@ the optional `max_zoom` cap only.
 The Worker presents one endpoint per layer and resolves per tile:
 
 ```
-GET /bathymetry/{z}/{x}/{y}.webp   raster: z≤8 → planet · z>8 covered → overlay · else → overzoom the planet (nearest-neighbour) · miss → transparent
-GET /bathymetry/{z}/{x}/{y}.pbf    vector: contours.pmtiles passthrough
-GET /bathymetry/raster.json        TileJSON (terrarium raster)
-GET /bathymetry/vector.json        TileJSON (vector layers)
+GET /seascape/{z}/{x}/{y}.webp   raster: z≤8 → planet · z>8 covered → overlay · else → overzoom the planet (nearest-neighbour) · miss → transparent
+GET /seascape/{z}/{x}/{y}.pbf    vector: contours.pmtiles passthrough
+GET /seascape/raster.json        TileJSON (terrarium raster)
+GET /seascape/vector.json        TileJSON (vector layers)
 ```
 
 This keeps the base at native z8 (no global upsampling) while presenting a single
