@@ -1,5 +1,5 @@
 {
-  "name": "bathymetry-worker",
+  "name": "seascape-worker",
   "private": true,
   "license": "BSD-3-Clause",
   "type": "module",

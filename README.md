@@ -1,10 +1,10 @@
-# Open Waters: Bathymetry
+# Seascape
 
 Bathymetry as web map tiles for MapLibre / Mapbox GL, build from a mosaic of global and regional sources. Served as raster DEM tiles for depth shading and hillshade, and vector contour tiles for crisp lines and labels.
 
 Coverage is global through z8 (~15″) with regional detail to z14 (~0.25″) where high-res sources exist.
 
-### **[Preview](https://openwatersio.github.io/bathymetry/)**
+### **[Preview](https://openwatersio.github.io/seascape/)**
 
 > [!WARNING]
 > **Not for navigational use.** Do not use this bathymetry for navigation, or in any
@@ -25,8 +25,8 @@ Coverage is global through z8 (~15″) with regional detail to z14 (~0.25″) wh
 
 The bathymetry is available as XYZ tiles in two flavors:
 
-- **Raster** (Terrarium-encoded DEM) — [TileJSON](https://tiles.openwaters.io/bathymetry/raster.json) - depth per pixel, for depth shading (color-relief), hillshade, and 3D terrain.<br/>
-- **Vector** (MVT) - [TileJSON](https://tiles.openwaters.io/bathymetry/vector.json) — bathymetric contour lines at non-uniform depth intervals.<br\>
+- **Raster** (Terrarium-encoded DEM) — [TileJSON](https://tiles.openwaters.io/seascape/raster.json) - depth per pixel, for depth shading (color-relief), hillshade, and 3D terrain.<br/>
+- **Vector** (MVT) - [TileJSON](https://tiles.openwaters.io/seascape/vector.json) — bathymetric contour lines at non-uniform depth intervals.<br\>
 
 Point any mapping library that supports XYZ tiles at these URLs. The TileJSONs include attribution and metadata, so libraries that support TileJSON will credit the sources automatically.
 
@@ -37,7 +37,7 @@ Point a `raster-dem` source and a `vector` source at the two TileJSONs:
 ```js
 import maplibregl from "maplibre-gl";
 
-const BASE = "https://tiles.openwaters.io/bathymetry";
+const BASE = "https://tiles.openwaters.io/seascape";
 
 const map = new maplibregl.Map({
   container: "map",

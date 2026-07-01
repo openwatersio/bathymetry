@@ -1,6 +1,6 @@
 FROM ubuntu:24.04
 
-LABEL org.opencontainers.image.source="https://github.com/openwatersio/bathymetry"
+LABEL org.opencontainers.image.source="https://github.com/openwatersio/seascape"
 LABEL org.opencontainers.image.description="Bathymetry → tile pipeline)"
 
 ENV DEBIAN_FRONTEND=noninteractive
