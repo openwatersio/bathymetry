@@ -1,6 +1,6 @@
 # NOAA NCEI Great Lakes Bathymetry (~90 m) — full open-lake, US + Canadian sides.
 # Run from pipelines/:  just ../sources/great_lakes/
-# source_download_greatlakes fetches the 6 lake tarballs and extracts each _lld.tif.
+# source_download_greatlakes fetches the 5 main-lake tarballs and extracts each _lld.tif.
 # Values are elevation on each lake's Low Water Datum (LWD): bed negative, land positive.
 # --clamp-positive drops cells above LWD (surrounding land) → lake-only; no negate, no offset
 # (LWD is already the low-water/chart datum). CRS is a .prj sidecar we drop → normalize

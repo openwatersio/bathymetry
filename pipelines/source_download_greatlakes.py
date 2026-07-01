@@ -6,12 +6,14 @@ low-water chart-datum analog), so the lake bed is negative and the surrounding l
 These are full open-lake grids, so they cover both the US and Canadian sides (the lakes are
 single water bodies — this fills the Canadian Great Lakes that had no source).
 
-file_list.txt holds the six tarball URLs. The recipe then drops land above LWD
-(source_datum --clamp-positive → lake-only) and assigns EPSG:4269 in normalize (the CRS
-ships as a .prj sidecar we don't keep). No login, ~220 MB total.
+file_list.txt holds the five main-lake tarball URLs (Superior, Michigan, Huron, Erie,
+Ontario; St. Clair — tiny, Huron–Erie corridor — isn't published at NGDC's path). The
+recipe then drops land above LWD (source_datum --clamp-positive → lake-only) and assigns
+EPSG:4269 in normalize (the CRS ships as a .prj sidecar we don't keep). No login, ~220 MB.
 """
 
 import os
+import shutil
 import sys
 import tarfile
 
@@ -34,10 +36,12 @@ def main():
         print(f"downloading {url}")
         utils.http_download(url, tgz)
         with tarfile.open(tgz) as t:
-            member = next(m for m in t.getmembers() if m.name.lower().endswith(".tif"))
-            name = os.path.basename(member.name)
-            with t.extractfile(member) as src, open(f"{out_dir}/{name}", "wb") as dst:
-                dst.write(src.read())
+            tifs = [m for m in t.getmembers() if m.name.lower().endswith("_lld.tif")]
+            if len(tifs) != 1:
+                sys.exit(f"expected exactly one *_lld.tif in {url}, found {len(tifs)}")
+            name = os.path.basename(tifs[0].name)
+            with t.extractfile(tifs[0]) as src, open(f"{out_dir}/{name}", "wb") as dst:
+                shutil.copyfileobj(src, dst)  # stream to disk, don't buffer the whole raster
             print(f"  extracted {name}")
         os.remove(tgz)
 
