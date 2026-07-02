@@ -7,8 +7,8 @@ export interface OverlayIndex {
 }
 
 /** The overlay archive holding (z,x,y) and its max zoom, or null if the tile's
- * cell is unpopulated. Callers only ask for z above the planet cap, which is
- * always deeper than split_z. */
+ * cell is unpopulated. Callers only ask for z above the planet cap, which is at
+ * or deeper than split_z (bundle.py enforces split_z <= cap + 1). */
 export function overlayFor(
   overlay: OverlayIndex,
   z: number,

@@ -60,5 +60,7 @@ jobs:
           npm run build
       - name: Worker self-checks
         run: |
+          # The .mjs checks import .ts directly — needs Node >= 22.18 (default type
+          # stripping); "node-version: 22" above resolves the latest 22.x, which is past it.
           node worker/src/terrarium.test.mjs
           node worker/src/overlay.test.mjs

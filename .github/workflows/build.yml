@@ -459,8 +459,9 @@ jobs:
             xargs -P 8 -I{} sh -c 'k="$1"; d="store/${k#bathymetry/}"; mkdir -p "$(dirname "$d")"; for a in 1 2 3 4 5; do aws s3 cp "s3://$DATA_BUCKET/$k" "$d" --only-show-errors && exit 0; sleep "$a"; done; echo "giving up on $k after 5 attempts" >&2; exit 1' _ {} < store/keys.txt
             docker run --rm -v "$PWD/store:/app/pipelines/store" \
               "$IMAGE:${{ github.sha }}" just bundle-group "$group"
-            out=$(ls store/bundle/*.pmtiles)
-            aws s3 cp "$out" "$B/$(basename "$out")" --content-type application/octet-stream
+            # Archive name is deterministic from the group (see bundle.archive_filename).
+            pm=$([ "$group" = planet ] && echo "planet.pmtiles" || echo "overlay-$group.pmtiles")
+            aws s3 cp "store/bundle/$pm" "$B/$pm" --content-type application/octet-stream
             aws s3 cp "store/bundle/$group.json" "$B/bundle-frags/$group.json" --content-type application/json
             # Drop this group's tiles + archive before the next group — this per-iteration
             # clean is what bounds the disk (the container wrote store/bundle as root).
