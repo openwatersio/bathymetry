@@ -116,40 +116,43 @@ const LABEL_SIZE = ["interpolate", ["linear"], ["zoom"], 8, 9, 13, 12];
 const LABEL_COLOR = "#036";
 const LABEL_HALO = "#fff";
 
-// Depth-shading colour ramp (elevation → colour), ported from seamap. The hazard tint folds
-// into THIS one color-relief ramp: two color-relief layers on one DEM source don't composite
-// (only the first renders), so water shallower than the safety depth is painted into the ramp
-// itself as #0a2a6b. Rebuilt in JS on safety change — an interpolate stop can't be a live
+// Depth-shading colour ramp (elevation → colour), chart-convention tints: shoal-dark →
+// deep-white (INT/NOAA), flat white beyond the 50 m curve so tint stays monotonic in depth.
+// Bands are perceptually spaced (adjacent ΔE ≥ 7 after 0.85-opacity compositing), weighted
+// toward the shoal bands where depth discrimination matters. The hazard tint folds into THIS
+// one color-relief ramp: two color-relief layers on one DEM source don't composite (only the
+// first renders), so water shallower than the safety depth is painted into the ramp itself as
+// HAZARD_COLOR. Rebuilt in JS on safety change — an interpolate stop can't be a live
 // global-state value, so unlike the unit/safety filters this one uses setPaintProperty.
 const DEPTH_RAMP = [
   -10000,
-  "#bae7fe",
+  "#e9f7ff",
   -50.1,
   "#e9f7ff",
   -50,
-  "#bae7fe",
+  "#c9e9fd",
   -20.1,
-  "#bae7fe",
+  "#c9e9fd",
   -20,
-  "#9adcfe",
+  "#a5d9fb",
   -10.1,
-  "#9adcfe",
+  "#a5d9fb",
   -10,
-  "#83d4fe",
+  "#7fc7f8",
   -5.1,
-  "#83d4fe",
+  "#7fc7f8",
   -5,
-  "#73cefe",
+  "#5db5f0",
   -2.1,
-  "#73cefe",
+  "#5db5f0",
   -2,
-  "#68cafe",
+  "#3fa2e4",
   -0.01,
-  "#68cafe",
+  "#3fa2e4",
   0,
   "rgba(0,0,0,0)", // land → transparent (OSM shows through)
 ];
-const HAZARD_COLOR = "#35A5E2";
+const HAZARD_COLOR = "#1f86cb"; // one perceptual step darker than the 0-2 m band
 // Colour of the depth ramp at elevation e (linear-interpolated). Used to pin a normal-coloured
 // stop right at the safety depth so the flip to HAZARD_COLOR is a crisp ~0.01 m edge at ANY safety
 // value — otherwise the blend feathers by however far −safety lands from the nearest ramp stop.
@@ -259,9 +262,9 @@ const style = {
       "source-layer": "contours",
       filter: contourLineFilter,
       paint: {
-        "line-color": "#777",
+        "line-color": "#4a7a9c",
         "line-width": 0.5,
-        "line-opacity": 0.33,
+        "line-opacity": 0.6,
       },
     },
     {
