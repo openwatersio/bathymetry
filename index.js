@@ -37,8 +37,16 @@ const contourMax = manifest
 // report which source a depth came from. Colour each source by id off the manifest list
 // (a match expression); footprints of sources not in the manifest fall back to grey.
 const COVERAGE_PALETTE = [
-  "#e6194b", "#3cb44b", "#f032e6", "#4363d8", "#f58231",
-  "#911eb4", "#008080", "#9a6324", "#800000", "#000075",
+  "#e6194b",
+  "#3cb44b",
+  "#f032e6",
+  "#4363d8",
+  "#f58231",
+  "#911eb4",
+  "#008080",
+  "#9a6324",
+  "#800000",
+  "#000075",
 ];
 const coverageColor =
   manifest && manifest.sources.length
@@ -66,8 +74,10 @@ const coverageColor =
 const UNIT = ["global-state", "unit"];
 const soundingText = [
   "case",
-  ["==", UNIT, "ft"], ["to-string", ["get", "depth_ft"]],
-  ["==", UNIT, "fm"], ["to-string", ["get", "depth_fm"]],
+  ["==", UNIT, "ft"],
+  ["to-string", ["get", "depth_ft"]],
+  ["==", UNIT, "fm"],
+  ["to-string", ["get", "depth_fm"]],
   ["to-string", ["get", "depth_m"]], // metres (default; also covers unit unset)
 ];
 // Contours: metre isobaths (sys != "ft", also legacy no-sys tiles) vs the fathom-curve set
@@ -76,20 +86,109 @@ const soundingText = [
 const IS_FEET = ["any", ["==", UNIT, "ft"], ["==", UNIT, "fm"]]; // metres is the fallback (unit unset)
 const contourLineFilter = [
   "case",
-  IS_FEET, ["==", ["get", "sys"], "ft"],
+  IS_FEET,
+  ["==", ["get", "sys"], "ft"],
   ["!=", ["get", "sys"], "ft"],
 ];
 const contourLabelFilter = [
   "case",
-  IS_FEET, ["==", ["get", "sys"], "ft"],
-  ["all", ["!=", ["get", "sys"], "ft"], ["==", ["%", ["to-number", ["get", "depth_abs_m"]], 10], 0]],
+  IS_FEET,
+  ["==", ["get", "sys"], "ft"],
+  [
+    "all",
+    ["!=", ["get", "sys"], "ft"],
+    ["==", ["%", ["to-number", ["get", "depth_abs_m"]], 10], 0],
+  ],
 ];
 const contourLabelText = [
   "case",
-  ["==", UNIT, "ft"], ["concat", ["to-string", ["get", "depth_ft"]], "ft"],
-  ["==", UNIT, "fm"], ["concat", ["to-string", ["get", "depth_fm"]], "fm"],
+  ["==", UNIT, "ft"],
+  ["concat", ["to-string", ["get", "depth_ft"]], "ft"],
+  ["==", UNIT, "fm"],
+  ["concat", ["to-string", ["get", "depth_fm"]], "fm"],
   ["concat", ["to-string", ["get", "depth_abs_m"]], "m"],
 ];
+
+// Shared label styling so soundings and contour labels read as one chart (same font, size,
+// colour, halo). Soundings override the colour to hazard-red at/above the safety depth.
+const LABEL_FONT = ["Open Sans Regular"];
+const LABEL_SIZE = ["interpolate", ["linear"], ["zoom"], 8, 9, 13, 12];
+const LABEL_COLOR = "#036";
+const LABEL_HALO = "#fff";
+
+// Depth-shading colour ramp (elevation → colour), ported from seamap. The hazard tint folds
+// into THIS one color-relief ramp: two color-relief layers on one DEM source don't composite
+// (only the first renders), so water shallower than the safety depth is painted into the ramp
+// itself as #0a2a6b. Rebuilt in JS on safety change — an interpolate stop can't be a live
+// global-state value, so unlike the unit/safety filters this one uses setPaintProperty.
+const DEPTH_RAMP = [
+  -10000,
+  "#bae7fe",
+  -50.1,
+  "#e9f7ff",
+  -50,
+  "#bae7fe",
+  -20.1,
+  "#bae7fe",
+  -20,
+  "#9adcfe",
+  -10.1,
+  "#9adcfe",
+  -10,
+  "#83d4fe",
+  -5.1,
+  "#83d4fe",
+  -5,
+  "#73cefe",
+  -2.1,
+  "#73cefe",
+  -2,
+  "#68cafe",
+  -0.01,
+  "#68cafe",
+  0,
+  "rgba(0,0,0,0)", // land → transparent (OSM shows through)
+];
+const HAZARD_COLOR = "#35A5E2";
+// Colour of the depth ramp at elevation e (linear-interpolated). Used to pin a normal-coloured
+// stop right at the safety depth so the flip to HAZARD_COLOR is a crisp ~0.01 m edge at ANY safety
+// value — otherwise the blend feathers by however far −safety lands from the nearest ramp stop.
+const rampColorAt = (e) => {
+  for (let i = 2; i < DEPTH_RAMP.length; i += 2)
+    if (e <= DEPTH_RAMP[i]) {
+      const e0 = DEPTH_RAMP[i - 2],
+        c0 = DEPTH_RAMP[i - 1];
+      const e1 = DEPTH_RAMP[i],
+        c1 = DEPTH_RAMP[i + 1];
+      if (c0[0] !== "#" || c1[0] !== "#") return c0;
+      const t = (e - e0) / (e1 - e0);
+      const p = (c) => [1, 3, 5].map((k) => parseInt(c.slice(k, k + 2), 16));
+      const a = p(c0),
+        b = p(c1);
+      return `rgb(${a.map((v, k) => Math.round(v + t * (b[k] - v))).join(",")})`;
+    }
+  return DEPTH_RAMP[1];
+};
+const depthReliefColor = (safety) => {
+  const s = -safety;
+  const stops = [];
+  for (let i = 0; i < DEPTH_RAMP.length; i += 2)
+    if (!(safety > 0) || DEPTH_RAMP[i] < s)
+      stops.push(DEPTH_RAMP[i], DEPTH_RAMP[i + 1]);
+  // Crisp edge: normal colour pinned at the safety depth, hazard from just shallower up to shore.
+  if (safety > 0)
+    stops.push(
+      s,
+      rampColorAt(s),
+      s + 0.01,
+      HAZARD_COLOR,
+      -0.01,
+      HAZARD_COLOR,
+      0,
+      "rgba(0,0,0,0)",
+    );
+  return ["interpolate", ["linear"], ["elevation"], ...stops];
+};
 
 // ─── Map style ────────────────────────────────────────────────────────────
 const style = {
@@ -130,38 +229,13 @@ const style = {
       type: "color-relief",
       source: "terrain-dem",
       paint: {
-        // Banded light-blue ramp ported from seamap's bathymetry-relief layer.
+        // One color-relief ramp for both depth-shading and the hazard tint (see DEPTH_RAMP /
+        // depthReliefColor); the JS override on load / safety-change folds in the hazard band.
         "color-relief-color": [
           "interpolate",
           ["linear"],
           ["elevation"],
-          -10000,
-          "#bae7fe",
-          -50.1,
-          "#e9f7ff",
-          -50,
-          "#bae7fe",
-          -20.1,
-          "#bae7fe",
-          -20,
-          "#9adcfe",
-          -10.1,
-          "#9adcfe",
-          -10,
-          "#83d4fe",
-          -5.1,
-          "#83d4fe",
-          -5,
-          "#73cefe",
-          -2.1,
-          "#73cefe",
-          -2,
-          "#68cafe",
-          -0.01,
-          "#68cafe",
-          // Land — transparent so the OSM base shows through (gebco-specific)
-          0,
-          "rgba(0, 0, 0, 0)",
+          ...DEPTH_RAMP,
         ],
         "color-relief-opacity": 0.85,
       },
@@ -200,14 +274,16 @@ const style = {
       layout: {
         "symbol-placement": "line",
         "text-field": contourLabelText,
-        "text-size": ["interpolate", ["linear"], ["zoom"], 8, 8, 13, 10],
-        "text-font": ["Open Sans Regular"],
+        "text-size": LABEL_SIZE,
+        "text-font": LABEL_FONT,
         "text-letter-spacing": 0.1,
         "text-max-angle": 30,
         "text-padding": 50,
       },
       paint: {
-        "text-color": "#777",
+        "text-color": LABEL_COLOR,
+        "text-halo-color": LABEL_HALO,
+        "text-halo-width": 1,
       },
     },
     {
@@ -218,14 +294,24 @@ const style = {
       minzoom: 7,
       layout: {
         "text-field": soundingText,
-        "text-font": ["Open Sans Regular"],
-        "text-size": ["interpolate", ["linear"], ["zoom"], 7, 9, 13, 12],
+        "text-font": LABEL_FONT,
+        "text-size": LABEL_SIZE,
         "symbol-sort-key": ["get", "depth_m"], // shoalest first → wins collisions
         "text-padding": 8,
       },
       paint: {
-        "text-color": "#036",
-        "text-halo-color": "#fff",
+        // Soundings at or above the safety depth turn hazard-red (S-52 emphasis); safety=0 → all normal.
+        "text-color": [
+          "case",
+          [
+            "all",
+            [">", ["global-state", "safety"], 0],
+            ["<=", ["get", "depth_m"], ["global-state", "safety"]],
+          ],
+          "#b00020",
+          LABEL_COLOR,
+        ],
+        "text-halo-color": LABEL_HALO,
         "text-halo-width": 1,
       },
     },
@@ -282,6 +368,7 @@ const map = new maplibregl.Map({
   style,
   bounds: BBOX,
   hash: true,
+  attributionControl: { compact: true },
 });
 window.map = map; // exposed for debugging / verification
 
@@ -312,7 +399,29 @@ const toggles = {
 
 map.on("load", () => {
   // Seed the unit variable from the control (metres is also the expression fallback if unset).
-  map.setGlobalStateProperty("unit", document.getElementById("unit-select")?.value || "m");
+  map.setGlobalStateProperty(
+    "unit",
+    document.getElementById("unit-select")?.value || "m",
+  );
+  // Safety depth (metres, default 2): drives the hazard tint (via the depth-shading ramp) and
+  // the red-sounding emphasis (via the `safety` state var). 0 = off.
+  let safetyMetres = 2;
+  const applySafety = () => {
+    map.setGlobalStateProperty("safety", safetyMetres); // red-sounding emphasis
+    // Hazard tint lives in the depth-shading ramp (one color-relief per source), rebuilt here.
+    map.setPaintProperty(
+      "depth-shading",
+      "color-relief-color",
+      depthReliefColor(safetyMetres),
+    );
+  };
+  const safetyInput = document.getElementById("safety-depth");
+  if (safetyInput) safetyInput.value = safetyMetres;
+  applySafety();
+  safetyInput?.addEventListener("input", (e) => {
+    safetyMetres = parseFloat(e.target.value) || 0;
+    applySafety();
+  });
   for (const [inputId, layerIds] of Object.entries(toggles)) {
     document.getElementById(inputId)?.addEventListener("change", (e) => {
       const vis = e.target.checked ? "visible" : "none";
@@ -322,9 +431,11 @@ map.on("load", () => {
     });
   }
   // One variable drives every unit-aware expression above — no per-layer restyle.
-  document.getElementById("unit-select")?.addEventListener("change", (e) =>
-    map.setGlobalStateProperty("unit", e.target.value),
-  );
+  document
+    .getElementById("unit-select")
+    ?.addEventListener("change", (e) =>
+      map.setGlobalStateProperty("unit", e.target.value),
+    );
 });
 
 // ─── Click to inspect ─────────────────────────────────────────────────────
@@ -336,7 +447,8 @@ async function readElevation(lngLat) {
   const n = 2 ** z;
   const fx = ((lngLat.lng + 180) / 360) * n;
   const fy =
-    ((1 - Math.asinh(Math.tan((lngLat.lat * Math.PI) / 180)) / Math.PI) / 2) * n;
+    ((1 - Math.asinh(Math.tan((lngLat.lat * Math.PI) / 180)) / Math.PI) / 2) *
+    n;
   const X = Math.floor(fx);
   const Y = Math.floor(fy);
   const px = Math.min(511, Math.floor((fx - X) * 512));
